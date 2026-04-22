@@ -1,0 +1,44 @@
+model:
+  name: transformer_sequence_regressor
+  encoder:
+    name: tabular_sequence
+    numeric_feature_groups: [continuous]
+    categorical_cols: []
+    categorical_embedding_dim: 8
+    model_dim: 256
+  backbone:
+    name: transformer_sequence
+    hidden_size: 256
+    num_layers: 6
+    num_heads: 8
+    dropout: 0.1
+    ffn_hidden_size: 1024
+    ffn_activation: swiglu
+    norm_type: rmsnorm
+    norm_eps: 1.0e-6
+    residual_scale: 1.0
+    qk_norm: true
+    attention_gate: true
+    max_seq_len: 4096
+    position_encoding: rope
+  head:
+    name: sequence_regression
+    target_key: ret_30min
+    output_dim: 1
+    use_layer_norm: false
+  numeric_feature_groups: [continuous]
+  categorical_cols: []
+  hidden_size: 256
+  num_layers: 6
+  dropout: 0.1
+  target_key: ret_30min
+  num_heads: 8
+  ffn_hidden_size: 1024
+  ffn_activation: swiglu
+  norm_type: rmsnorm
+  norm_eps: 1.0e-6
+  residual_scale: 1.0
+  qk_norm: true
+  attention_gate: true
+  max_seq_len: 4096
+  position_encoding: rope

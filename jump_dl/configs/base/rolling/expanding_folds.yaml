@@ -1,0 +1,18 @@
+rolling:
+  output_root: workdirs/jump_dl/rolling
+  folds:
+    - name: fold_00
+      train_start: "2013-09-16"
+      train_end: "2016-12-31"
+      val_start: "2017-01-01"
+      val_end: "2017-12-31"
+    - name: fold_01
+      train_start: "2013-09-16"
+      train_end: "2017-12-31"
+      val_start: "2018-01-01"
+      val_end: "2018-12-31"
+    - name: fold_02
+      train_start: "2013-09-16"
+      train_end: "2018-12-31"
+      val_start: "2019-01-01"
+      val_end: "2019-12-31"

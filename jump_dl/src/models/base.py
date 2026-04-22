@@ -9,3 +9,14 @@ nn = torch.nn
 class BaseModel(nn.Module):
     pass
 
+
+class BaseEncoder(nn.Module):
+    pass
+
+
+class BaseBackbone(nn.Module):
+    output_dim: int
+
+
+class BaseHead(nn.Module):
+    pass

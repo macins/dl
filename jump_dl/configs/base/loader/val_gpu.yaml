@@ -1,0 +1,8 @@
+data:
+  val_dataloader:
+    batch_size: 128
+    shuffle: false
+    num_workers: 4
+    persistent_workers: true
+    pin_memory: true
+    prefetch_factor: 2

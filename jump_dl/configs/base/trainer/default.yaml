@@ -1,0 +1,12 @@
+trainer:
+  num_epochs: 60
+  device: cuda
+  monitor_key: cosine_similarity
+  monitor_mode: max
+  grad_clip_norm: 10.0
+  ema:
+    enabled: true
+    decay: 0.99
+    start_step: 200
+    eval_with_ema: true
+    save_ema_checkpoint: true

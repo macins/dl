@@ -1,0 +1,27 @@
+model:
+  name: gru_sequence_regressor
+  encoder:
+    name: tabular_sequence
+    numeric_feature_groups: [continuous]
+    categorical_cols: []
+    categorical_embedding_dim: 8
+    model_dim: 256
+  backbone:
+    name: gru_sequence
+    hidden_size: 256
+    blocks:
+      - name: gru_residual
+        dropout: 0.1
+      - name: gru_residual
+        dropout: 0.1
+  head:
+    name: sequence_regression
+    target_key: ret_30min
+    output_dim: 1
+    use_layer_norm: true
+  numeric_feature_groups: [continuous]
+  categorical_cols: []
+  hidden_size: 256
+  num_layers: 2
+  dropout: 0.1
+  target_key: ret_30min

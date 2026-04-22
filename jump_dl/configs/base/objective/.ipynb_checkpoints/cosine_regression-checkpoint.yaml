@@ -1,0 +1,3 @@
+objective:
+  lam_cos: 0.0
+  lam_mse: 1.0
