@@ -22,6 +22,13 @@ model:
     max_seq_len: 4096
     position_encoding: rope
     causal: true
+    use_moe: false
+    num_experts: 4
+    expert_hidden_size: 256
+    top_k: 2
+    aux_loss_weight: 1.0e-2
+    router_z_loss_weight: 1.0e-3
+    shared_experts: 0
   head:
     name: sequence_regression
     target_key: ret_30min
@@ -43,3 +50,11 @@ model:
   attention_gate: true
   max_seq_len: 4096
   position_encoding: rope
+  causal: true
+  use_moe: false
+  num_experts: 4
+  expert_hidden_size: 256
+  top_k: 2
+  aux_loss_weight: 1.0e-2
+  router_z_loss_weight: 1.0e-3
+  shared_experts: 0

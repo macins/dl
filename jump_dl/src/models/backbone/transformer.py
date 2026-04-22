@@ -32,9 +32,18 @@ class TransformerSequenceBackbone(BaseBackbone):
         max_seq_len: int = 4096,
         position_encoding: str = "rope",
         causal: bool = False,
+        use_moe: bool = False,
+        num_experts: int = 4,
+        expert_hidden_size: int | None = None,
+        top_k: int = 2,
+        aux_loss_weight: float = 1e-2,
+        router_z_loss_weight: float = 1e-3,
+        shared_experts: int = 0,
         blocks: Sequence[Mapping[str, object]] | None = None,
     ) -> None:
         super().__init__()
+        self.last_aux_losses: dict[str, torch.Tensor] = {}
+        self.last_aux_metrics: dict[str, float] = {}
         self.position_encoding = str(position_encoding).strip().lower()
         self.input_position = (
             PositionEmbedding(model_dim=hidden_size, max_seq_len=max_seq_len, mode="absolute")
@@ -56,6 +65,13 @@ class TransformerSequenceBackbone(BaseBackbone):
                     "max_seq_len": max_seq_len,
                     "position_encoding": "none" if self.position_encoding == "absolute" else self.position_encoding,
                     "causal": causal,
+                    "use_moe": use_moe,
+                    "num_experts": num_experts,
+                    "expert_hidden_size": expert_hidden_size,
+                    "top_k": top_k,
+                    "aux_loss_weight": aux_loss_weight,
+                    "router_z_loss_weight": router_z_loss_weight,
+                    "shared_experts": shared_experts,
                 }
                 for _ in range(int(num_layers))
             ]
@@ -65,8 +81,15 @@ class TransformerSequenceBackbone(BaseBackbone):
         self.output_dim = int(hidden_size)
 
     def forward(self, x, *, padding_mask=None):
+        self.last_aux_losses = {}
+        self.last_aux_metrics = {}
         if self.input_position is not None:
             x = self.input_position.add_to_input(x)
-        for block in self.blocks:
+        for block_idx, block in enumerate(self.blocks):
             x = block(x, padding_mask=padding_mask)
+            for name, value in getattr(block, "last_aux_losses", {}).items():
+                self.last_aux_losses[name] = self.last_aux_losses.get(name, 0) + value
+                self.last_aux_losses[f"block_{block_idx}_{name}"] = value
+            for name, value in getattr(block, "last_aux_metrics", {}).items():
+                self.last_aux_metrics[f"block_{block_idx}_{name}"] = value
         return x

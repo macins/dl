@@ -75,7 +75,14 @@ class _BaseSequenceRegressor(BaseModel):
     def forward(self, batch: dict) -> dict:
         x = self.encoder(batch)
         x = self.backbone(x, padding_mask=batch.get("padding_mask"))
-        return self.head(x)
+        out = self.head(x)
+        aux_losses = getattr(self.backbone, "last_aux_losses", {})
+        aux_metrics = getattr(self.backbone, "last_aux_metrics", {})
+        if aux_losses:
+            out["aux_losses"] = aux_losses
+        if aux_metrics:
+            out["aux_metrics"] = aux_metrics
+        return out
 
 
 @register_model("gru_sequence_regressor")
@@ -100,6 +107,13 @@ class TransformerSequenceRegressor(_BaseSequenceRegressor):
         max_seq_len: int = 4096,
         position_encoding: str = "rope",
         causal: bool = False,
+        use_moe: bool = False,
+        num_experts: int = 4,
+        expert_hidden_size: int | None = None,
+        top_k: int = 2,
+        aux_loss_weight: float = 1e-2,
+        router_z_loss_weight: float = 1e-3,
+        shared_experts: int = 0,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -116,6 +130,13 @@ class TransformerSequenceRegressor(_BaseSequenceRegressor):
                 "max_seq_len": max_seq_len,
                 "position_encoding": position_encoding,
                 "causal": causal,
+                "use_moe": use_moe,
+                "num_experts": num_experts,
+                "expert_hidden_size": expert_hidden_size,
+                "top_k": top_k,
+                "aux_loss_weight": aux_loss_weight,
+                "router_z_loss_weight": router_z_loss_weight,
+                "shared_experts": shared_experts,
             },
             **kwargs,
         )

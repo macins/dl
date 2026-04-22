@@ -98,6 +98,23 @@ class CosineSimilarityObjective(nn.Module):
             raise KeyError("Batch does not contain a valid mask. Expected 'padding_mask' or targets['valid_mask'].")
         return mask.bool()
 
+    def get_aux_losses(self, outputs: dict) -> tuple[torch.Tensor, dict[str, float]]:
+        aux_losses = outputs.get("aux_losses", {})
+        aux_metrics = outputs.get("aux_metrics", {})
+        preds = self.get_prediction_tensor(outputs)
+        total = torch.tensor(0.0, device=preds.device, dtype=preds.dtype)
+        metrics: dict[str, float] = {}
+        if isinstance(aux_losses, Mapping):
+            for name, value in aux_losses.items():
+                if torch.is_tensor(value):
+                    total = total + value
+                    metrics[name] = float(value.detach().item())
+        if isinstance(aux_metrics, Mapping):
+            for name, value in aux_metrics.items():
+                if isinstance(value, (int, float)):
+                    metrics[name] = float(value)
+        return total, metrics
+
     def forward(self, outputs: dict, batch: dict) -> ObjectiveOutput:
         y_pred = self.get_prediction_tensor(outputs)
         y_true = self.get_target_tensor(batch)
@@ -113,13 +130,15 @@ class CosineSimilarityObjective(nn.Module):
         mse_normalized = torch.mean((y_pred[mask] - y_true_norm[mask]) ** 2) if mask.any() else torch.tensor(
             0.0, device=y_pred.device, dtype=y_pred.dtype
         )
+        aux_loss_total, aux_metrics = self.get_aux_losses(outputs)
         return ObjectiveOutput(
-            loss=self.lam_mse * mse_normalized - self.lam_cos * cos,
+            loss=self.lam_mse * mse_normalized - self.lam_cos * cos + aux_loss_total,
             metrics={
                 "cosine_similarity": float(cos.detach().item()),
                 "mse": float(mse_normalized.detach().item()),
                 "mse_raw": float(mse_raw.detach().item()),
                 "target_mean": self.target_mean,
                 "target_std": self.target_std,
+                **aux_metrics,
             },
         )

@@ -241,6 +241,106 @@ class FeedForward(nn.Module):
         return out
 
 
+class MoEFeedForward(nn.Module):
+    def __init__(
+        self,
+        *,
+        hidden_size: int,
+        dense_ffn_hidden_size: int,
+        expert_hidden_size: int | None = None,
+        num_experts: int = 4,
+        top_k: int = 2,
+        activation: str = "swiglu",
+        dropout: float = 0.1,
+        aux_loss_weight: float = 1e-2,
+        router_z_loss_weight: float = 1e-3,
+        shared_experts: int = 0,
+    ) -> None:
+        super().__init__()
+        if num_experts <= 0:
+            raise ValueError(f"num_experts must be positive, got {num_experts}")
+        self.hidden_size = int(hidden_size)
+        self.dense_ffn_hidden_size = int(dense_ffn_hidden_size)
+        default_expert_hidden = max(1, self.dense_ffn_hidden_size // 2)
+        self.expert_hidden_size = int(expert_hidden_size or default_expert_hidden)
+        if self.expert_hidden_size >= self.dense_ffn_hidden_size:
+            raise ValueError(
+                "expert_hidden_size must be strictly smaller than dense_ffn_hidden_size "
+                f"(got expert_hidden_size={self.expert_hidden_size}, dense_ffn_hidden_size={self.dense_ffn_hidden_size})"
+            )
+        self.num_experts = int(num_experts)
+        self.top_k = min(int(top_k), self.num_experts)
+        self.aux_loss_weight = float(aux_loss_weight)
+        self.router_z_loss_weight = float(router_z_loss_weight)
+        self.shared_experts = int(shared_experts)
+
+        self.router = nn.Linear(self.hidden_size, self.num_experts)
+        self.experts = nn.ModuleList([
+            FeedForward(
+                hidden_size=self.hidden_size,
+                ffn_hidden_size=self.expert_hidden_size,
+                activation=activation,
+                dropout=dropout,
+            )
+            for _ in range(self.num_experts)
+        ])
+        self.shared_expert_layers = nn.ModuleList([
+            FeedForward(
+                hidden_size=self.hidden_size,
+                ffn_hidden_size=self.expert_hidden_size,
+                activation=activation,
+                dropout=dropout,
+            )
+            for _ in range(self.shared_experts)
+        ])
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        padding_mask: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor], dict[str, float]]:
+        router_logits = self.router(x)
+        router_probs = torch.softmax(router_logits, dim=-1)
+        topk_values, topk_indices = torch.topk(router_probs, k=self.top_k, dim=-1)
+        topk_values = topk_values / topk_values.sum(dim=-1, keepdim=True).clamp_min(1e-9)
+
+        expert_outputs = torch.stack([expert(x, padding_mask=padding_mask) for expert in self.experts], dim=-2)
+        gather_index = topk_indices.unsqueeze(-1).expand(*topk_indices.shape, self.hidden_size)
+        selected_outputs = expert_outputs.gather(dim=-2, index=gather_index)
+        out = (selected_outputs * topk_values.unsqueeze(-1)).sum(dim=-2)
+
+        if self.shared_expert_layers:
+            shared_out = torch.stack(
+                [expert(x, padding_mask=padding_mask) for expert in self.shared_expert_layers],
+                dim=0,
+            ).mean(dim=0)
+            out = out + shared_out
+
+        expert_selection = torch.zeros_like(router_probs).scatter(-1, topk_indices, 1.0)
+        if padding_mask is not None:
+            valid = padding_mask.to(dtype=router_probs.dtype)
+            denom = valid.sum().clamp_min(1.0)
+            mean_probs = (router_probs * valid.unsqueeze(-1)).sum(dim=(0, 1)) / denom
+            mean_selection = (expert_selection * valid.unsqueeze(-1)).sum(dim=(0, 1)) / (denom * self.top_k)
+        else:
+            mean_probs = router_probs.mean(dim=(0, 1))
+            mean_selection = expert_selection.mean(dim=(0, 1)) / self.top_k
+
+        aux_loss = self.aux_loss_weight * self.num_experts * torch.sum(mean_probs * mean_selection)
+        router_z_loss = self.router_z_loss_weight * torch.mean(torch.logsumexp(router_logits, dim=-1).pow(2))
+        metrics = {
+            "moe_aux_loss": float(aux_loss.detach().item()),
+            "moe_router_z_loss": float(router_z_loss.detach().item()),
+            "moe_expert_usage_max": float(mean_selection.max().detach().item()),
+            "moe_expert_usage_min": float(mean_selection.min().detach().item()),
+        }
+        losses = {
+            "aux_loss": aux_loss,
+            "router_z_loss": router_z_loss,
+        }
+        return out, losses, metrics
+
+
 @register_block("transformer")
 @register_block("transformer_encoder")
 class TransformerEncoderBlock(nn.Module):
@@ -260,9 +360,19 @@ class TransformerEncoderBlock(nn.Module):
         max_seq_len: int = 4096,
         position_encoding: str = "rope",
         causal: bool = False,
+        use_moe: bool = False,
+        num_experts: int = 4,
+        expert_hidden_size: int | None = None,
+        top_k: int = 2,
+        aux_loss_weight: float = 1e-2,
+        router_z_loss_weight: float = 1e-3,
+        shared_experts: int = 0,
     ) -> None:
         super().__init__()
         self.residual_scale = float(residual_scale)
+        self.use_moe = bool(use_moe)
+        self.last_aux_losses: dict[str, torch.Tensor] = {}
+        self.last_aux_metrics: dict[str, float] = {}
         self.attn_norm = build_norm(norm_type, hidden_size, eps=norm_eps)
         self.ffn_norm = build_norm(norm_type, hidden_size, eps=norm_eps)
         self.attn = MultiHeadSelfAttention(
@@ -276,18 +386,39 @@ class TransformerEncoderBlock(nn.Module):
             position_encoding=position_encoding,
             causal=causal,
         )
-        self.ffn = FeedForward(
-            hidden_size=hidden_size,
-            ffn_hidden_size=ffn_hidden_size,
-            activation=ffn_activation,
-            dropout=dropout,
-        )
+        dense_ffn_hidden_size = int(ffn_hidden_size or 4 * hidden_size)
+        if self.use_moe:
+            self.ffn = MoEFeedForward(
+                hidden_size=hidden_size,
+                dense_ffn_hidden_size=dense_ffn_hidden_size,
+                expert_hidden_size=expert_hidden_size,
+                num_experts=num_experts,
+                top_k=top_k,
+                activation=ffn_activation,
+                dropout=dropout,
+                aux_loss_weight=aux_loss_weight,
+                router_z_loss_weight=router_z_loss_weight,
+                shared_experts=shared_experts,
+            )
+        else:
+            self.ffn = FeedForward(
+                hidden_size=hidden_size,
+                ffn_hidden_size=dense_ffn_hidden_size,
+                activation=ffn_activation,
+                dropout=dropout,
+            )
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor, padding_mask: torch.Tensor | None = None) -> torch.Tensor:
+        self.last_aux_losses = {}
+        self.last_aux_metrics = {}
         attn_out = self.attn(self.attn_norm(x), padding_mask=padding_mask)
         x = x + self.residual_scale * self.dropout(attn_out)
-        ffn_out = self.ffn(self.ffn_norm(x), padding_mask=padding_mask)
+        ffn_in = self.ffn_norm(x)
+        if self.use_moe:
+            ffn_out, self.last_aux_losses, self.last_aux_metrics = self.ffn(ffn_in, padding_mask=padding_mask)
+        else:
+            ffn_out = self.ffn(ffn_in, padding_mask=padding_mask)
         x = x + self.residual_scale * self.dropout(ffn_out)
         if padding_mask is not None:
             x = x * padding_mask.unsqueeze(-1).to(dtype=x.dtype)
