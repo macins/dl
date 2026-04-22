@@ -1,13 +1,137 @@
-inherits:
-  - common/runtime.yaml
-  - objective/cosine_regression.yaml
-  - data/shared_dataset.yaml
-  - data/train_val_split_2013_2019.yaml
-  - loader/train_gpu.yaml
-  - loader/val_gpu.yaml
-  - model/gru_sequence_regressor.yaml
-  - optimizer/adamw.yaml
-  - scheduler/cosine_60.yaml
-  - trainer/default.yaml
-
+seed: 42
 output_dir: workdirs/jump_dl/gru_baseline
+target_col: ret_30min
+
+objective:
+  lam_cos: 1.0
+  lam_mse: 0.0
+
+data:
+  dataset:
+    data_path: data/features/data.parquet
+    target_col: ret_30min
+    time_col: Time
+    symbol_col: Symbol
+    feature_cols:
+      continuous:
+        - feature_mtm_5_zscore10_neutralized
+        - feature_roc_20
+        - feature_psy_5_zscore2_neutralized
+        - feature_rsi_10_zscore10
+        - feature_imb_vol_2min_zscore3_neutralized
+        - feature_mom_10
+        - feature_mom_30_zscore2_neutralized
+        - feature_roc_3_neutralized
+        - feature_cr_3_neutralized
+        - feature_mtm_3_zscore5_neutralized
+        - feature_bollinger_low_3_zscore5
+        - feature_imb_vol_10min
+        - feature_dmi_minus_di_60
+        - feature_imb_vol_2min
+        - feature_roc_20_zscore10_neutralized
+        - feature_b612_6_12_zscore2
+        - feature_corr_CS5_30
+        - feature_vr_10_neutralized
+        - feature_bollinger_up_5_zscore2
+        - feature_rsi_3_neutralized
+        - feature_corr_CS2_3
+        - feature_wpr_3_zscore3
+        - feature_mom_1_neutralized
+        - feature_bollinger_low_5_zscore10
+        - feature_mom_2_zscore2
+        - feature_corr_CS5_3
+        - feature_amt_mom_2_zscore3
+        - feature_obv_zscore10
+        - feature_amt_mom_1_zscore10
+        - feature_mtm_5_zscore3_neutralized
+        - feature_dmi_minus_di_3_zscore10_neutralized
+        - feature_mtm_10_zscore10_neutralized
+        - feature_b36_3_6_zscore5_neutralized
+        - feature_vr_5_neutralized
+        - feature_dmi_plus_di_20_zscore2_neutralized
+        - feature_bollinger_up_3_zscore10
+        - feature_mtm_60_zscore2_neutralized
+        - feature_bollinger_low_10_zscore2
+        - feature_bollinger_up_10_zscore2
+        - feature_mtm_20_zscore2_neutralized
+        - feature_psy_3_zscore2_neutralized
+        - feature_cr_5_neutralized
+        - feature_psy_5_zscore10
+        - feature_rsi_60
+        - feature_amt_mom_1
+        - feature_amt_mom_1_zscore3
+        - feature_bollinger_mid_5_zscore2
+        - feature_roc_3_zscore2
+        - feature_mtm_10_zscore2
+        - feature_corr_CS5_60
+        - feature_pos_2_zscore5_neutralized
+        - feature_amt_mom_1_neutralized
+        - feature_rsi_60_zscore30
+        - feature_mom_60
+        - feature_psy_3
+        - feature_bollinger_low_3_zscore2
+        - feature_corr_CS2_5
+        - feature_mom_5_neutralized
+        - feature_corr_CS5_10
+        - feature_psy_10
+        - feature_imb_vol_3min_zscore3_neutralized
+        - feature_corr_CS5_5
+        - feature_bollinger_up_3_zscore2
+        - feature_bollinger_low_5_zscore2
+        - feature_corr_CS3_5
+        - feature_wpr_5_zscore5
+        - feature_min_path_2_zscore2
+        - feature_corr_CS3_3
+        - feature_vr_3_neutralized
+        - feature_brar_br_10_zscore3
+    categorical_cols: []
+    vocab_path: null
+    sort: true
+    return_meta: true
+  split:
+    train:
+      # Inclusive date filter on pl.col("Time").dt.date()
+      start_date: "2013-09-16"
+      end_date: "2018-12-31"
+    val:
+      # Inclusive date filter on pl.col("Time").dt.date()
+      start_date: "2019-01-01"
+      end_date: "2019-12-31"
+  train_dataloader:
+    batch_size: 128
+    shuffle: true
+    num_workers: 4
+    persistent_workers: true
+    pin_memory: true
+    prefetch_factor: 2
+
+model:
+  name: gru_sequence_regressor
+  numeric_feature_groups: [continuous]
+  categorical_cols: []
+  hidden_size: 256
+  num_layers: 2
+  dropout: 0.1
+  target_key: ret_30min
+
+optimizer:
+  name: adamw
+  lr: 0.0001
+  weight_decay: 0.01
+
+scheduler:
+  name: cosine
+  T_max: 60
+
+trainer:
+  num_epochs: 60
+  device: cuda
+  monitor_key: cosine_similarity
+  monitor_mode: max
+  grad_clip_norm: 10.00
+  ema:
+    enabled: true
+    decay: 0.99
+    start_step: 200
+    eval_with_ema: true
+    save_ema_checkpoint: true

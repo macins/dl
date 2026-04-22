@@ -31,6 +31,7 @@ class TransformerSequenceBackbone(BaseBackbone):
         attention_gate: bool = True,
         max_seq_len: int = 4096,
         position_encoding: str = "rope",
+        causal: bool = False,
         blocks: Sequence[Mapping[str, object]] | None = None,
     ) -> None:
         super().__init__()
@@ -54,6 +55,7 @@ class TransformerSequenceBackbone(BaseBackbone):
                     "attention_gate": attention_gate,
                     "max_seq_len": max_seq_len,
                     "position_encoding": "none" if self.position_encoding == "absolute" else self.position_encoding,
+                    "causal": causal,
                 }
                 for _ in range(int(num_layers))
             ]

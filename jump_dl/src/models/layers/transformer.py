@@ -49,6 +49,10 @@ def _build_alibi_bias(
     return bias.to(dtype=dtype)
 
 
+def _build_causal_mask(seq_len: int, device: torch.device) -> torch.Tensor:
+    return torch.triu(torch.ones((seq_len, seq_len), device=device, dtype=torch.bool), diagonal=1)
+
+
 class PositionEmbedding(nn.Module):
     def __init__(
         self,
@@ -110,6 +114,7 @@ class MultiHeadSelfAttention(nn.Module):
         norm_type: str = "rmsnorm",
         max_seq_len: int = 4096,
         position_encoding: str = "rope",
+        causal: bool = False,
     ) -> None:
         super().__init__()
         if hidden_size % num_heads != 0:
@@ -120,6 +125,7 @@ class MultiHeadSelfAttention(nn.Module):
         self.scale = self.head_dim ** -0.5
         self.qk_norm = bool(qk_norm)
         self.use_attention_gate = bool(attention_gate)
+        self.causal = bool(causal)
 
         self.q_proj = nn.Linear(self.hidden_size, self.hidden_size)
         self.k_proj = nn.Linear(self.hidden_size, self.hidden_size)
@@ -164,6 +170,10 @@ class MultiHeadSelfAttention(nn.Module):
                 dtype=scores.dtype,
             )
             scores = scores + alibi
+
+        if self.causal:
+            causal_mask = _build_causal_mask(x.shape[1], x.device).view(1, 1, x.shape[1], x.shape[1])
+            scores = scores.masked_fill(causal_mask, torch.finfo(scores.dtype).min)
 
         if padding_mask is not None:
             key_mask = padding_mask.bool().unsqueeze(1).unsqueeze(2)
@@ -249,6 +259,7 @@ class TransformerEncoderBlock(nn.Module):
         attention_gate: bool = True,
         max_seq_len: int = 4096,
         position_encoding: str = "rope",
+        causal: bool = False,
     ) -> None:
         super().__init__()
         self.residual_scale = float(residual_scale)
@@ -263,6 +274,7 @@ class TransformerEncoderBlock(nn.Module):
             norm_type=norm_type,
             max_seq_len=max_seq_len,
             position_encoding=position_encoding,
+            causal=causal,
         )
         self.ffn = FeedForward(
             hidden_size=hidden_size,

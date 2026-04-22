@@ -99,6 +99,7 @@ class TransformerSequenceRegressor(_BaseSequenceRegressor):
         attention_gate: bool = True,
         max_seq_len: int = 4096,
         position_encoding: str = "rope",
+        causal: bool = False,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -114,6 +115,7 @@ class TransformerSequenceRegressor(_BaseSequenceRegressor):
                 "attention_gate": attention_gate,
                 "max_seq_len": max_seq_len,
                 "position_encoding": position_encoding,
+                "causal": causal,
             },
             **kwargs,
         )
