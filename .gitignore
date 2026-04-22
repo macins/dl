@@ -1,0 +1,12 @@
+# ignore the data
+data/
+
+# ignore Python cache
+__pycache__/
+*.pyc
+
+# ignore env files
+.venv/
+
+# ignore workdirs
+workdirs/
