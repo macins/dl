@@ -10,3 +10,5 @@ __pycache__/
 
 # ignore workdirs
 workdirs/
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
