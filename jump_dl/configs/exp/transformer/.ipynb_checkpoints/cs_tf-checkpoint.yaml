@@ -33,61 +33,58 @@ model:
       - type: attention
       - type: cross_symbol_attention
       - type: ffn
-        ffn_hidden_size: 512
+        ffn_hidden_size: 384
     use_register_tokens: true
-    num_register_tokens: 8
+    num_register_tokens: 4
     register_axis: symbol
     return_register_tokens: false
 
-    head:
-      name: sequence_mog_regression
-      input_dim: 256
-      target_key: ret_30min
-      output_dim: 1
-      num_components: 2
-      use_layer_norm: true
-      shared_mean: true
-      scale_init: [1.0, 0.0]
+  head:
+    name: sequence_mog_regression
+    input_dim: 256
+    target_key: ret_30min
+    output_dim: 1
+    num_components: 2
+    use_layer_norm: true
+    shared_mean: false
+    scale_init: [1.0, 0.0]
 
 objective:
   name: cosine_similarity
   pred_key: ret_30min
   target_key: ret_30min
-  target_mean: 0.0
-  target_std: 1.0
 
   sigma_floor: 1.0e-4
   sigma_max: 20.0
 
   loss_weights:
-    cos: 1.0
+    cos: 0.0
     mse: 0.0
     mog_nll: 0.0
-    usage_kl: 0.001
+    usage_kl: 0.000
     scale_reg: 0.0
-    aux: 1.0
 
   loss_schedules:
     cos:
       by: step
       mode: cosine
       start_step: 0
-      end_step: 10000
+      end_step: 0
       start_weight: 1.0
-      end_weight: 0.5
+      end_weight: 1.0
 
     mse:
       by: step
-      mode: cosine
+      mode: linear
       start_step: 0
-      end_step: 10000
+      end_step: 0
       start_weight: 0.0
-      end_weight: 0.5
+      end_weight: 0.0
 
     mog_nll:
       by: step
       mode: linear
-      start_step: 1000
-      end_step: 10000
+      start_step: 0
+      end_step: 1000
       start_weight: 0.0
-      end_weight: 0.05
+      end_weight: 0.0

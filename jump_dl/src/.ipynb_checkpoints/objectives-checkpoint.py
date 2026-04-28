@@ -756,7 +756,7 @@ class CosineSimilarityObjective(nn.Module):
         loss = (
             weights.get("cos", 0.0) * loss_cos
             + weights.get("mse", 0.0) * loss_mse
-            + weights.get("mog_nll", 0.0) * loss_mog_nll
+            + weights.get("mog_nll", 1.0) * loss_mog_nll
             + weights.get("usage_kl", 0.0) * loss_usage_kl
             + weights.get("scale_reg", 0.0) * loss_scale_reg
             + weights.get("aux", 1.0) * aux_loss_total
@@ -780,8 +780,185 @@ class CosineSimilarityObjective(nn.Module):
         }
 
         return ObjectiveOutput(loss=loss, metrics=metrics)
-
-
+    def __repr__(self) -> str:
+        def fmt_float(x: float | None) -> str:
+            if x is None:
+                return "None"
+            x = float(x)
+            if x == 0.0:
+                return "0.0"
+            if abs(x) < 1e-3 or abs(x) >= 1e4:
+                return f"{x:.3e}"
+            return f"{x:.6g}"
+    
+        def fmt_mapping(m: Mapping[str, Any]) -> str:
+            if not m:
+                return "{}"
+    
+            parts = []
+            for k, v in m.items():
+                if isinstance(v, float):
+                    parts.append(f"{k}={fmt_float(v)}")
+                else:
+                    parts.append(f"{k}={v!r}")
+    
+            return "{" + ", ".join(parts) + "}"
+    
+        def fmt_schedule(name: str, cfg: Mapping[str, Any]) -> str:
+            by = cfg.get("by", cfg.get("schedule_by", "step"))
+            mode = cfg.get("mode", cfg.get("type", "linear"))
+    
+            if str(by).lower() in {"step", "global_step", "steps"}:
+                start = cfg.get("start", cfg.get("start_step", 0))
+                end = cfg.get("end", cfg.get("end_step", start))
+                unit = "step"
+            else:
+                start = cfg.get("start", cfg.get("start_epoch", 1))
+                end = cfg.get("end", cfg.get("end_epoch", self.num_epochs))
+                unit = "epoch"
+    
+            base = self.loss_weights.get(name, 0.0)
+            start_weight = cfg.get("start_weight", base)
+            end_weight = cfg.get("end_weight", base)
+    
+            return (
+                f"{name}: {mode}, by={unit}, "
+                f"{start}->{end}, "
+                f"{fmt_float(start_weight)}->{fmt_float(end_weight)}"
+            )
+    
+        current_weights = self.get_current_loss_weights()
+    
+        lines = [
+            f"{self.__class__.__name__}(",
+            f"  pred_key={self.pred_key!r}, target_key={self.target_key!r},",
+            f"  pred_index={self.pred_index!r}, target_index={self.target_index!r},",
+            (
+                "  target_normalization="
+                f"(mean={fmt_float(self.target_mean)}, std={fmt_float(self.target_std)}),"
+            ),
+            (
+                "  mog="
+                f"(key={self.mog_key!r}, "
+                f"sigma_floor={fmt_float(self.sigma_floor)}, "
+                f"sigma_max={fmt_float(self.sigma_max)}),"
+            ),
+            (
+                "  sample_weight="
+                f"(enabled={self.use_sample_weight}, weight_key={self.weight_key!r}),"
+            ),
+            (
+                "  progress="
+                f"(global_step={self.global_step}, "
+                f"epoch={self.current_epoch}/{self.num_epochs}, "
+                f"train={self.training_context}),"
+            ),
+            f"  loss_weights={fmt_mapping(self.loss_weights)},",
+            f"  current_loss_weights={fmt_mapping(current_weights)},",
+        ]
+    
+        if self.loss_schedules:
+            lines.append("  loss_schedules=[")
+            for name, cfg in self.loss_schedules.items():
+                lines.append(f"    {fmt_schedule(name, cfg)},")
+            lines.append("  ],")
+        else:
+            lines.append("  loss_schedules=[],")
+    
+        lines.append(f"  eps={fmt_float(self.eps)}")
+        lines.append(")")
+    
+        return "\n".join(lines)
+        
+    def __repr__(self) -> str:
+        def fmt_float(x: float | None) -> str:
+            if x is None:
+                return "None"
+            x = float(x)
+            if x == 0.0:
+                return "0.0"
+            if abs(x) < 1e-3 or abs(x) >= 1e4:
+                return f"{x:.3e}"
+            return f"{x:.6g}"
+    
+        def fmt_mapping(m: Mapping[str, Any]) -> str:
+            if not m:
+                return "{}"
+    
+            parts = []
+            for k, v in m.items():
+                if isinstance(v, float):
+                    parts.append(f"{k}={fmt_float(v)}")
+                else:
+                    parts.append(f"{k}={v!r}")
+    
+            return "{" + ", ".join(parts) + "}"
+    
+        def fmt_schedule(name: str, cfg: Mapping[str, Any]) -> str:
+            by = cfg.get("by", cfg.get("schedule_by", "step"))
+            mode = cfg.get("mode", cfg.get("type", "linear"))
+    
+            if str(by).lower() in {"step", "global_step", "steps"}:
+                start = cfg.get("start", cfg.get("start_step", 0))
+                end = cfg.get("end", cfg.get("end_step", start))
+                unit = "step"
+            else:
+                start = cfg.get("start", cfg.get("start_epoch", 1))
+                end = cfg.get("end", cfg.get("end_epoch", self.num_epochs))
+                unit = "epoch"
+    
+            base = self.loss_weights.get(name, 0.0)
+            start_weight = cfg.get("start_weight", base)
+            end_weight = cfg.get("end_weight", base)
+    
+            return (
+                f"{name}: {mode}, by={unit}, "
+                f"{start}->{end}, "
+                f"{fmt_float(start_weight)}->{fmt_float(end_weight)}"
+            )
+    
+        current_weights = self.get_current_loss_weights()
+    
+        lines = [
+            f"{self.__class__.__name__}(",
+            f"  pred_key={self.pred_key!r}, target_key={self.target_key!r},",
+            f"  pred_index={self.pred_index!r}, target_index={self.target_index!r},",
+            (
+                "  target_normalization="
+                f"(mean={fmt_float(self.target_mean)}, std={fmt_float(self.target_std)}),"
+            ),
+            (
+                "  mog="
+                f"(key={self.mog_key!r}, "
+                f"sigma_floor={fmt_float(self.sigma_floor)}, "
+                f"sigma_max={fmt_float(self.sigma_max)}),"
+            ),
+            (
+                "  sample_weight="
+                f"(enabled={self.use_sample_weight}, weight_key={self.weight_key!r}),"
+            ),
+            (
+                "  progress="
+                f"(global_step={self.global_step}, "
+                f"epoch={self.current_epoch}/{self.num_epochs}, "
+                f"train={self.training_context}),"
+            ),
+            f"  loss_weights={fmt_mapping(self.loss_weights)},",
+            f"  current_loss_weights={fmt_mapping(current_weights)},",
+        ]
+    
+        if self.loss_schedules:
+            lines.append("  loss_schedules=[")
+            for name, cfg in self.loss_schedules.items():
+                lines.append(f"    {fmt_schedule(name, cfg)},")
+            lines.append("  ],")
+        else:
+            lines.append("  loss_schedules=[],")
+    
+        lines.append(f"  eps={fmt_float(self.eps)}")
+        lines.append(")")
+    
+        return "\n".join(lines)
 class MoGRegressionObjective(CosineSimilarityObjective):
     """
     Convenience alias/class.
@@ -793,7 +970,7 @@ class MoGRegressionObjective(CosineSimilarityObjective):
     def __init__(
         self,
         *args,
-        lam_mog_nll: float = 0.05,
+        lam_mog_nll: float = 1.0,
         **kwargs,
     ) -> None:
         super().__init__(*args, lam_mog_nll=lam_mog_nll, **kwargs)

@@ -75,9 +75,6 @@ class TrainerConfig:
             "mse_raw",
             "cosine_similarity",
             "mog_nll",
-            "loss_weight_cos",
-            "loss_weight_mse",
-            "loss_weight_mog_nll",
         ]
     )
 
@@ -612,13 +609,24 @@ class Trainer:
                 self.scheduler.step()
 
             denom = max(total_steps, 1)
+            
+            global_cos = metric.compute()
+            
             out = {
                 "loss": total_loss / denom,
-                "cosine_similarity": metric.compute(),
+                "cosine_similarity": global_cos,
             }
-
+            
             for name, total in metric_sums.items():
-                out[name] = total / denom
+                avg_value = total / denom
+            
+                # IMPORTANT:
+                # step_out.metrics["cosine_similarity"] is per-step/per-virtual-batch cosine.
+                # Do NOT let it overwrite the epoch/global cosine.
+                if name == "cosine_similarity":
+                    out["step_cosine_similarity"] = avg_value
+                else:
+                    out[name] = avg_value
 
             if self.config.log_timing:
                 out["avg_data_time"] = total_data_time / denom
@@ -635,19 +643,93 @@ class Trainer:
     # ---------------------------------------------------------------------
     # Logging / fit / checkpoint
     # ---------------------------------------------------------------------
-
     @staticmethod
     def _format_metric_name(name: str) -> str:
         mapping = {
+            "loss": "loss",
             "cosine_similarity": "cos",
-            "mse_raw": "mse_raw",
-            "mse": "mse",
-            "mog_nll": "mog_nll",
-            "loss_weight_cos": "w_cos",
-            "loss_weight_mse": "w_mse",
-            "loss_weight_mog_nll": "w_mog",
+            "mse_raw": "mse",
+            "mse": "mseN",
+            "mog_nll": "mog",
+            "loss_weight_cos": "wC",
+            "loss_weight_mse": "wM",
+            "loss_weight_mog_nll": "wG",
         }
         return mapping.get(name, name)
+    
+    
+    def _print_epoch_table_header(
+        self,
+        *,
+        has_val: bool,
+        metric_keys: list[str],
+    ) -> None:
+        columns: list[tuple[str, int]] = [("ep", 7)]
+    
+        for key in metric_keys:
+            columns.append((f"tr_{self._format_metric_name(key)}", 9))
+    
+        if has_val:
+            val_prefix = "ve" if (
+                self.config.ema.enabled and self.config.ema.eval_with_ema
+            ) else "va"
+    
+            for key in metric_keys:
+                columns.append((f"{val_prefix}_{self._format_metric_name(key)}", 9))
+    
+        columns.append(("lr", 10))
+    
+        header = " ".join(f"{name:>{width}}" for name, width in columns)
+        divider = " ".join("-" * width for _, width in columns)
+    
+        print(header, flush=True)
+        print(divider, flush=True)
+    
+        self._epoch_table_header_printed = True
+        self._epoch_table_keys = metric_keys
+    
+    
+    def _print_epoch_table_row(
+        self,
+        *,
+        epoch: int,
+        train_metrics: dict[str, float],
+        val_metrics: dict[str, float] | None,
+    ) -> None:
+        lr = float(self.optimizer.param_groups[0]["lr"]) if self.optimizer.param_groups else 0.0
+    
+        values: list[tuple[str, int]] = [
+            (f"{epoch}/{self.config.num_epochs}", 7),
+        ]
+    
+        def fmt(key: str, value: float | None) -> str:
+            if value is None:
+                return ""
+    
+            if key in {"cosine_similarity"}:
+                return f"{value:.4f}"
+    
+            if key in {"mse_raw", "mse"}:
+                return f"{value:.2e}"
+    
+            if key in {"mog_nll"}:
+                return f"{value:.3f}"
+    
+            if key.startswith("loss_weight_"):
+                return f"{value:.2f}"
+    
+            return f"{value:.4f}"
+    
+        for key in self._epoch_table_keys:
+            values.append((fmt(key, train_metrics.get(key)), 9))
+    
+        if val_metrics is not None:
+            for key in self._epoch_table_keys:
+                values.append((fmt(key, val_metrics.get(key)), 9))
+    
+        values.append((f"{lr:.2e}", 10))
+    
+        print(" ".join(f"{value:>{width}}" for value, width in values), flush=True)
 
     def _available_table_keys(
         self,
@@ -664,62 +746,6 @@ class Trainer:
             keys = ["loss"]
 
         return keys
-
-    def _print_epoch_table_header(
-        self,
-        *,
-        has_val: bool,
-        metric_keys: list[str],
-    ) -> None:
-        columns: list[tuple[str, int]] = [("epoch", 10)]
-
-        for key in metric_keys:
-            columns.append((f"tr_{self._format_metric_name(key)}", 14))
-
-        if has_val:
-            val_prefix = "val_ema" if (
-                self.config.ema.enabled and self.config.ema.eval_with_ema
-            ) else "val"
-
-            for key in metric_keys:
-                columns.append((f"{val_prefix}_{self._format_metric_name(key)}", 14))
-
-        columns.append(("lr", 12))
-
-        header = " | ".join(f"{name:>{width}}" for name, width in columns)
-        divider = "-+-".join("-" * width for _, width in columns)
-
-        print(header, flush=True)
-        print(divider, flush=True)
-
-        self._epoch_table_header_printed = True
-        self._epoch_table_keys = metric_keys
-
-    def _print_epoch_table_row(
-        self,
-        *,
-        epoch: int,
-        train_metrics: dict[str, float],
-        val_metrics: dict[str, float] | None,
-    ) -> None:
-        lr = float(self.optimizer.param_groups[0]["lr"]) if self.optimizer.param_groups else 0.0
-
-        values: list[tuple[str, int]] = [
-            (f"{epoch}/{self.config.num_epochs}", 10),
-        ]
-
-        for key in self._epoch_table_keys:
-            value = train_metrics.get(key)
-            values.append(("" if value is None else f"{value:.6f}", 14))
-
-        if val_metrics is not None:
-            for key in self._epoch_table_keys:
-                value = val_metrics.get(key)
-                values.append(("" if value is None else f"{value:.6f}", 14))
-
-        values.append((f"{lr:.6e}", 12))
-
-        print(" | ".join(f"{value:>{width}}" for value, width in values), flush=True)
 
     def fit(self, train_dataloader, val_dataloader=None) -> list[dict[str, float]]:
         history: list[dict[str, float]] = []

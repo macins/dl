@@ -5,7 +5,7 @@ import json
 import random
 from datetime import date
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 import polars as pl
@@ -16,7 +16,7 @@ from datetime import date, datetime
 from jump_dl.src.config import load_config_with_inheritance
 from jump_dl.src.dataio import build_slice_dataloader, build_market_day_dataloader
 from jump_dl.src.models import build_model
-from jump_dl.src.objectives import CosineSimilarityObjective
+from jump_dl.src.objectives import CosineSimilarityObjective, MoGRegressionObjective
 from jump_dl.src.optimizers import build_optimizer
 from jump_dl.src.schedulers import build_scheduler
 from jump_dl.src.trainer import Trainer, TrainerConfig
@@ -664,22 +664,87 @@ def _build_objective(
     target_stats: Mapping[str, Mapping[str, float]],
 ) -> CosineSimilarityObjective:
     objective_cfg = dict(cfg.get("objective", {}))
-    target_key = str(objective_cfg.get("target_key", cfg.get("target_col", "ret_30min")))
+
+    objective_name = str(
+        objective_cfg.get("name", objective_cfg.get("type", "cosine_similarity"))
+    ).lower()
+
     target_cols = _resolve_target_cols(dataset_cfg)
+
+    default_target_key = (
+        dataset_cfg.get("target_col")
+        or cfg.get("target_col")
+        or (target_cols[0] if target_cols else "ret_30min")
+    )
+
+    target_key = str(objective_cfg.get("target_key", default_target_key))
+    pred_key = str(objective_cfg.get("pred_key", target_key))
+
     inferred_target_index = objective_cfg.get("target_index")
     if inferred_target_index is None and target_key in target_cols:
         inferred_target_index = target_cols.index(target_key)
+
     stats = target_stats.get(target_key, {"mean": 0.0, "std": 1.0})
-    return CosineSimilarityObjective(
+
+    # Allow explicit config override.
+    target_mean = float(objective_cfg.get("target_mean", stats.get("mean", 0.0)))
+    target_std = float(objective_cfg.get("target_std", stats.get("std", 1.0)))
+    if target_std == 0.0:
+        target_std = 1.0
+
+    common_kwargs = dict(
         lam_cos=float(objective_cfg.get("lam_cos", 1.0)),
         lam_mse=float(objective_cfg.get("lam_mse", 1.0)),
-        pred_key=str(objective_cfg.get("pred_key", cfg.get("target_col", "ret_30min"))),
+        pred_key=pred_key,
         target_key=target_key,
-        target_mean=float(stats.get("mean", 0.0)),
-        target_std=float(stats.get("std", 1.0)),
+        target_mean=target_mean,
+        target_std=target_std,
         pred_index=objective_cfg.get("pred_index"),
         target_index=inferred_target_index,
+
+        # New MoG / weighted loss args.
+        lam_mog_nll=float(objective_cfg.get("lam_mog_nll", 0.0)),
+        lam_usage_kl=float(objective_cfg.get("lam_usage_kl", 0.0)),
+        lam_scale_reg=float(objective_cfg.get("lam_scale_reg", 0.0)),
+        aux_loss_weight=float(objective_cfg.get("aux_loss_weight", 1.0)),
+        loss_weights=objective_cfg.get("loss_weights"),
+        loss_schedules=objective_cfg.get("loss_schedules"),
+        mog_key=str(objective_cfg.get("mog_key", "mog")),
+        sigma_floor=float(objective_cfg.get("sigma_floor", 1e-4)),
+        sigma_max=(
+            None
+            if objective_cfg.get("sigma_max") is None
+            else float(objective_cfg.get("sigma_max"))
+        ),
+        use_sample_weight=bool(objective_cfg.get("use_sample_weight", False)),
+        weight_key=str(objective_cfg.get("weight_key", "weight")),
+        eps=float(objective_cfg.get("eps", 1e-12)),
     )
+
+    if objective_name in {
+        "cosine_similarity",
+        "cosine",
+        "cos_mse",
+        "weighted_cosine",
+    }:
+        objective = CosineSimilarityObjective(**common_kwargs)
+
+    elif objective_name in {
+        "mog",
+        "mog_regression",
+        "mixture_of_gaussian",
+        "mixture_of_gaussians",
+        "mog_nll",
+    }:
+        objective = MoGRegressionObjective(**common_kwargs)
+
+    else:
+        raise ValueError(
+            f"Unknown objective name={objective_name!r}. "
+            "Expected one of: cosine_similarity, mog_regression."
+        )
+
+    return objective
 
 
 def main() -> None:
@@ -699,10 +764,13 @@ def main() -> None:
     print("Building model...")
     model = build_model(model_cfg)
     print(model)
-    
-    print("Building loaders...", flush=True)
-    
     train_df = _load_frame(train_dataset_cfg)
+    target_stats = _compute_target_stats(train_df, _resolve_target_cols(train_dataset_cfg))
+    objective = _build_objective(cfg, dataset_cfg=train_dataset_cfg, target_stats=target_stats)
+    print(objective)
+    optimizer = build_optimizer(cfg["optimizer"], model.parameters())
+    scheduler = build_scheduler(cfg.get("scheduler"), optimizer)
+    print("Building loaders...", flush=True)
     val_df = _load_frame(val_dataset_cfg) if val_dataset_cfg is not None else None
     
     numeric_groups = [str(v) for v in model_cfg.get("numeric_feature_groups", ["continuous"])]
@@ -719,7 +787,15 @@ def main() -> None:
         feature_cols,
         numeric_groups=numeric_groups,
     )
-    
+    trainer = Trainer(
+        model=model,
+        objective=objective,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        feature_stats=feature_stats,
+        config=TrainerConfig(**dict(cfg.get("trainer", {}))),
+        output_dir=run_output_dir,
+    )
     # 3. 用 train-only continuous stats 生成 train/val 的 market_state columns
     train_df, val_df, feature_cols, market_info = _prepare_market_state_splits(
         train_df=train_df,
@@ -756,8 +832,6 @@ def main() -> None:
         numeric_groups=stat_numeric_groups,
     )
     
-    target_stats = _compute_target_stats(train_df, _resolve_target_cols(train_dataset_cfg))
-    
     train_loader = _build_dataloader(
         train_df,
         train_dataset_cfg,
@@ -777,18 +851,6 @@ def main() -> None:
         if val_df is not None else None
     )
 
-    objective = _build_objective(cfg, dataset_cfg=train_dataset_cfg, target_stats=target_stats)
-    optimizer = build_optimizer(cfg["optimizer"], model.parameters())
-    scheduler = build_scheduler(cfg.get("scheduler"), optimizer)
-    trainer = Trainer(
-        model=model,
-        objective=objective,
-        optimizer=optimizer,
-        scheduler=scheduler,
-        feature_stats=feature_stats,
-        config=TrainerConfig(**dict(cfg.get("trainer", {}))),
-        output_dir=run_output_dir,
-    )
     print("Start training...")
     cfg["resolved_feature_cols"] = feature_cols
     cfg["resolved_feature_stats_groups"] = list(feature_stats.keys())
