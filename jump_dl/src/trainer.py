@@ -68,6 +68,19 @@ class TrainerConfig:
     use_amp: bool = False
     amp_dtype: str = "bfloat16"
 
+    # Printed if present in metrics.
+    # Full history.json still stores every metric.
+    table_metric_keys: list[str] = field(
+        default_factory=lambda: [
+            "mse_raw",
+            "cosine_similarity",
+            "mog_nll",
+            "loss_weight_cos",
+            "loss_weight_mse",
+            "loss_weight_mog_nll",
+        ]
+    )
+
     def __post_init__(self) -> None:
         if isinstance(self.ema, dict):
             self.ema = EMAConfig(**self.ema)
@@ -110,6 +123,7 @@ class Trainer:
         self.feature_stats = self._prepare_feature_stats(feature_stats)
 
         self._epoch_table_header_printed = False
+        self._epoch_table_keys: list[str] = []
         self.global_step = 0
         self.ema_num_updates = 0
 
@@ -120,6 +134,16 @@ class Trainer:
     @staticmethod
     def _is_uninitialized_tensor(x: Any) -> bool:
         return isinstance(x, (UninitializedParameter, UninitializedBuffer))
+
+    def _set_objective_progress(self, *, train: bool, epoch: int) -> None:
+        hook = getattr(self.objective, "set_training_progress", None)
+        if callable(hook):
+            hook(
+                global_step=self.global_step,
+                epoch=epoch,
+                num_epochs=self.config.num_epochs,
+                train=train,
+            )
 
     def _get_amp_dtype(self) -> torch.dtype | None:
         dtype = str(self.config.amp_dtype).strip().lower()
@@ -244,22 +268,6 @@ class Trainer:
         self,
         padding_mask: torch.Tensor,
     ) -> list[torch.Tensor]:
-        """
-        Convert one full panel batch into several virtual symbol-day minibatches.
-
-        Input:
-            old mode:
-                padding_mask: (B, T)
-
-            panel mode:
-                padding_mask: (B, N, T)
-
-        Output:
-            list[loss_mask], each loss_mask has the same shape as padding_mask.
-
-        In panel mode, each virtual minibatch selects a chunk of valid (b, n)
-        symbol-day pairs, and keeps all valid timestamps for those pairs.
-        """
         padding_mask = padding_mask.bool()
         cfg = self.config.panel_virtual_batch
 
@@ -448,6 +456,7 @@ class Trainer:
         batch: dict[str, Any],
         run_model,
         train: bool,
+        epoch: int,
     ) -> tuple[dict[str, Any], Any, float, float, float]:
         """
         Run one forward/backward/optimizer step.
@@ -461,6 +470,8 @@ class Trainer:
         """
         if train:
             self.optimizer.zero_grad(set_to_none=True)
+
+        self._set_objective_progress(train=train, epoch=epoch)
 
         amp_dtype = self._get_amp_dtype()
         amp_enabled = self._amp_enabled()
@@ -558,6 +569,7 @@ class Trainer:
                         batch=step_batch,
                         run_model=run_model,
                         train=train,
+                        epoch=epoch,
                     )
 
                     total_forward_time += fwd_t
@@ -583,14 +595,18 @@ class Trainer:
                         and self.config.show_progress_bar
                         and hasattr(progress, "set_postfix")
                     ):
-                        progress.set_postfix(
-                            loss=f"{total_loss / max(total_steps, 1):.4f}",
-                            cos=f"{metric.compute():.4f}",
-                            steps=str(total_steps),
-                            amp=str(self.config.use_amp),
-                            dtype=str(self.config.amp_dtype),
-                            refresh=False,
-                        )
+                        postfix = {
+                            "loss": f"{total_loss / max(total_steps, 1):.4f}",
+                            "cos": f"{metric.compute():.4f}",
+                            "steps": str(total_steps),
+                            "amp": str(self.config.use_amp),
+                            "dtype": str(self.config.amp_dtype),
+                        }
+
+                        if "mog_nll" in metric_sums:
+                            postfix["mog"] = f"{metric_sums['mog_nll'] / max(total_steps, 1):.4f}"
+
+                        progress.set_postfix(**postfix, refresh=False)
 
             if train and self.scheduler is not None:
                 self.scheduler.step()
@@ -620,24 +636,53 @@ class Trainer:
     # Logging / fit / checkpoint
     # ---------------------------------------------------------------------
 
-    def _print_epoch_table_header(self, *, has_val: bool) -> None:
-        val_prefix = "val_ema" if (
-            self.config.ema.enabled and self.config.ema.eval_with_ema
-        ) else "val"
+    @staticmethod
+    def _format_metric_name(name: str) -> str:
+        mapping = {
+            "cosine_similarity": "cos",
+            "mse_raw": "mse_raw",
+            "mse": "mse",
+            "mog_nll": "mog_nll",
+            "loss_weight_cos": "w_cos",
+            "loss_weight_mse": "w_mse",
+            "loss_weight_mog_nll": "w_mog",
+        }
+        return mapping.get(name, name)
 
-        columns: list[tuple[str, int]] = [
-            ("epoch", 10),
-            ("train_mse", 12),
-            ("train_cos", 12),
-        ]
+    def _available_table_keys(
+        self,
+        train_metrics: dict[str, float],
+        val_metrics: dict[str, float] | None,
+    ) -> list[str]:
+        keys: list[str] = []
+
+        for key in self.config.table_metric_keys:
+            if key in train_metrics or (val_metrics is not None and key in val_metrics):
+                keys.append(key)
+
+        if not keys:
+            keys = ["loss"]
+
+        return keys
+
+    def _print_epoch_table_header(
+        self,
+        *,
+        has_val: bool,
+        metric_keys: list[str],
+    ) -> None:
+        columns: list[tuple[str, int]] = [("epoch", 10)]
+
+        for key in metric_keys:
+            columns.append((f"tr_{self._format_metric_name(key)}", 14))
 
         if has_val:
-            columns.extend(
-                [
-                    (f"{val_prefix}_mse", 12),
-                    (f"{val_prefix}_cos", 12),
-                ]
-            )
+            val_prefix = "val_ema" if (
+                self.config.ema.enabled and self.config.ema.eval_with_ema
+            ) else "val"
+
+            for key in metric_keys:
+                columns.append((f"{val_prefix}_{self._format_metric_name(key)}", 14))
 
         columns.append(("lr", 12))
 
@@ -648,6 +693,7 @@ class Trainer:
         print(divider, flush=True)
 
         self._epoch_table_header_printed = True
+        self._epoch_table_keys = metric_keys
 
     def _print_epoch_table_row(
         self,
@@ -660,17 +706,16 @@ class Trainer:
 
         values: list[tuple[str, int]] = [
             (f"{epoch}/{self.config.num_epochs}", 10),
-            (f"{train_metrics.get('mse_raw', 0.0):.6f}", 12),
-            (f"{train_metrics.get('cosine_similarity', 0.0):.6f}", 12),
         ]
 
+        for key in self._epoch_table_keys:
+            value = train_metrics.get(key)
+            values.append(("" if value is None else f"{value:.6f}", 14))
+
         if val_metrics is not None:
-            values.extend(
-                [
-                    (f"{val_metrics.get('mse_raw', 0.0):.6f}", 12),
-                    (f"{val_metrics.get('cosine_similarity', 0.0):.6f}", 12),
-                ]
-            )
+            for key in self._epoch_table_keys:
+                value = val_metrics.get(key)
+                values.append(("" if value is None else f"{value:.6f}", 14))
 
         values.append((f"{lr:.6e}", 12))
 
@@ -680,6 +725,7 @@ class Trainer:
         history: list[dict[str, float]] = []
         best_value = None
         self._epoch_table_header_printed = False
+        self._epoch_table_keys = []
 
         for epoch in range(1, self.config.num_epochs + 1):
             train_metrics = self._run_epoch(
@@ -688,22 +734,10 @@ class Trainer:
                 epoch=epoch,
             )
 
-            row = {
-                "epoch": epoch,
-                "train_loss": train_metrics["loss"],
-                "train_cosine_similarity": train_metrics["cosine_similarity"],
-            }
+            row: dict[str, float | int] = {"epoch": epoch}
 
-            if "mse" in train_metrics:
-                row["train_mse"] = train_metrics["mse"]
-            if "mse_raw" in train_metrics:
-                row["train_mse_raw"] = train_metrics["mse_raw"]
-
-            if self.config.log_timing:
-                row["train_avg_data_time"] = train_metrics.get("avg_data_time", 0.0)
-                row["train_avg_forward_time"] = train_metrics.get("avg_forward_time", 0.0)
-                row["train_avg_backward_time"] = train_metrics.get("avg_backward_time", 0.0)
-                row["train_avg_step_time"] = train_metrics.get("avg_step_time", 0.0)
+            for name, value in train_metrics.items():
+                row[f"train_{name}"] = float(value)
 
             val_metrics = None
             if val_dataloader is not None:
@@ -714,35 +748,37 @@ class Trainer:
                         epoch=epoch,
                     )
 
-                row["val_loss"] = val_metrics["loss"]
-                row["val_cosine_similarity"] = val_metrics["cosine_similarity"]
+                for name, value in val_metrics.items():
+                    row[f"val_{name}"] = float(value)
 
-                if "mse" in val_metrics:
-                    row["val_mse"] = val_metrics["mse"]
-                if "mse_raw" in val_metrics:
-                    row["val_mse_raw"] = val_metrics["mse_raw"]
-
-                if self.config.log_timing:
-                    row["val_avg_data_time"] = val_metrics.get("avg_data_time", 0.0)
-                    row["val_avg_forward_time"] = val_metrics.get("avg_forward_time", 0.0)
-
-                current = row[f"val_{self.config.monitor_key}"]
+                monitor_name = f"val_{self.config.monitor_key}"
             else:
-                current = row[f"train_{self.config.monitor_key}"]
+                monitor_name = f"train_{self.config.monitor_key}"
 
-            history.append(row)
+            if monitor_name not in row:
+                raise KeyError(
+                    f"Monitor key {monitor_name!r} not found in logged metrics. "
+                    f"Available keys: {sorted(row.keys())}"
+                )
 
-            self._save_history(history)
+            current = float(row[monitor_name])
+            history.append(row)  # type: ignore[arg-type]
+
+            self._save_history(history)  # type: ignore[arg-type]
 
             if self._is_better(current, best_value):
                 best_value = current
-                self._save_checkpoint("best.pt", epoch=epoch, metrics=row)
+                self._save_checkpoint("best.pt", epoch=epoch, metrics=row)  # type: ignore[arg-type]
 
-            self._save_checkpoint("last.pt", epoch=epoch, metrics=row)
+            self._save_checkpoint("last.pt", epoch=epoch, metrics=row)  # type: ignore[arg-type]
 
             if self.config.print_epoch_table:
                 if not self._epoch_table_header_printed:
-                    self._print_epoch_table_header(has_val=val_dataloader is not None)
+                    metric_keys = self._available_table_keys(train_metrics, val_metrics)
+                    self._print_epoch_table_header(
+                        has_val=val_dataloader is not None,
+                        metric_keys=metric_keys,
+                    )
 
                 self._print_epoch_table_row(
                     epoch=epoch,
@@ -752,7 +788,7 @@ class Trainer:
             else:
                 print(json.dumps(row, ensure_ascii=False), flush=True)
 
-        return history
+        return history  # type: ignore[return-value]
 
     def _is_better(self, current: float, best: float | None) -> bool:
         if best is None:
