@@ -1,5 +1,19 @@
 data:
-  train_dataset:
+  train_dataloader:
+    batch_size: 128
+    shuffle: true
+    num_workers: 4
+    persistent_workers: true
+    pin_memory: true
+    prefetch_factor: 2
+  val_dataloader:
+    batch_size: 128
+    shuffle: false
+    num_workers: 4
+    persistent_workers: true
+    pin_memory: true
+    prefetch_factor: 2
+  dataset:
     data_path: "data/data.parquet"
     feature_cols:
       continuous:
@@ -11,7 +25,6 @@ data:
         - feature_mom_10
         - feature_mom_30_zscore2_neutralized
         - feature_roc_3_neutralized
-        - feature_cr_3_neutralized
         - feature_mtm_3_zscore5_neutralized
         - feature_bollinger_low_3_zscore5
         - feature_imb_vol_10min
@@ -20,7 +33,6 @@ data:
         - feature_roc_20_zscore10_neutralized
         - feature_b612_6_12_zscore2
         - feature_corr_CS5_30
-        - feature_vr_10_neutralized
         - feature_bollinger_up_5_zscore2
         - feature_rsi_3_neutralized
         - feature_corr_CS2_3
@@ -36,7 +48,6 @@ data:
         - feature_dmi_minus_di_3_zscore10_neutralized
         - feature_mtm_10_zscore10_neutralized
         - feature_b36_3_6_zscore5_neutralized
-        - feature_vr_5_neutralized
         - feature_dmi_plus_di_20_zscore2_neutralized
         - feature_bollinger_up_3_zscore10
         - feature_mtm_60_zscore2_neutralized
@@ -44,7 +55,6 @@ data:
         - feature_bollinger_up_10_zscore2
         - feature_mtm_20_zscore2_neutralized
         - feature_psy_3_zscore2_neutralized
-        - feature_cr_5_neutralized
         - feature_psy_5_zscore10
         - feature_rsi_60
         - feature_amt_mom_1
@@ -71,5 +81,8 @@ data:
         - feature_wpr_5_zscore5
         - feature_min_path_2_zscore2
         - feature_corr_CS3_3
-        - feature_vr_3_neutralized
         - feature_brar_br_10_zscore3
+      categorical:
+        - Symbol
+        - DATA_sector
+        - DATA_month

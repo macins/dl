@@ -1,7 +1,7 @@
 inherits:
   - ../../base/common/runtime.yaml
   - ../../base/objective/cosine_regression.yaml
-  - ../../base/data/shared_dataset.yaml
+  - ../../base/data/day_dataset.yaml
   - ../../base/data/train_val_split_2013_2019.yaml
   - ../../base/model/transformer_sequence_regressor.yaml
   - ../../base/optimizer/adamw.yaml
@@ -14,9 +14,12 @@ model:
   name: transformer_panel_regressor
 
   hidden_size: 256
-  num_layers: 2
+  num_layers: 1
   dropout: 0.1
   target_key: ret_30min
+
+  encoder:
+    model_dim: 256
 
   backbone:
     name: transformer_sequence
@@ -27,9 +30,14 @@ model:
     causal: true
     position_encoding: alibi
     sublayers:
+      - type: attention
+      - type: cross_symbol_attention
       - type: ffn
         ffn_hidden_size: 512
-      - type: attention
+    use_register_tokens: true
+    num_register_tokens: 8
+    register_axis: symbol
+    return_register_tokens: false
 
   head:
     name: sequence_regression

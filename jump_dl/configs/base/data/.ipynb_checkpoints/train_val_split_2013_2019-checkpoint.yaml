@@ -1,0 +1,8 @@
+data:
+  split:
+    train:
+      start_date: "2013-09-16"
+      end_date: "2019-12-31"
+    val:
+      start_date: "2020-01-01"
+      end_date: "2021-12-31"

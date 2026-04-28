@@ -1,0 +1,59 @@
+data:
+  market_state:
+    enabled: true
+    source_group: continuous
+    group_name: market_state
+
+    source_cols:
+      # trend / momentum regime
+      - feature_roc_20
+      - feature_roc_3_neutralized
+      - feature_mom_10
+      - feature_mom_60
+      - feature_mom_30_zscore2_neutralized
+      - feature_mtm_10_zscore2
+      - feature_mtm_20_zscore2_neutralized
+      - feature_mtm_60_zscore2_neutralized
+
+      # oscillator / overbought-oversold regime
+      - feature_rsi_60
+      - feature_rsi_10_zscore10
+      - feature_psy_3
+      - feature_psy_10
+      - feature_psy_5_zscore10
+      - feature_wpr_5_zscore5
+
+      # volume / liquidity / imbalance state
+      - feature_imb_vol_2min
+      - feature_imb_vol_10min
+      - feature_imb_vol_3min_zscore3_neutralized
+      - feature_amt_mom_1
+      - feature_amt_mom_1_zscore3
+      - feature_amt_mom_2_zscore3
+      - feature_obv_zscore10
+
+      # cross-sectional correlation / synchronization state
+      - feature_corr_CS5_60
+      - feature_corr_CS5_30
+      - feature_corr_CS5_10
+      - feature_corr_CS2_5
+      - feature_corr_CS3_5
+
+      # Bollinger / relative location state
+      - feature_bollinger_up_10_zscore2
+      - feature_bollinger_low_10_zscore2
+      - feature_bollinger_mid_5_zscore2
+      - feature_bollinger_up_3_zscore2
+      - feature_bollinger_low_3_zscore2
+
+    stats:
+      - mean
+      - std
+      - abs_mean
+      - rms
+      - pos_frac
+
+    leave_one_out: true
+    source_clip_value: 10.0
+    eps: 1.0e-6
+    prefix: mkt

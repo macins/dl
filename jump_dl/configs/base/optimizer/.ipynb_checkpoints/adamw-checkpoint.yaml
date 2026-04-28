@@ -1,4 +1,5 @@
 optimizer:
   name: adamw
+  betas: [0.9, 0.99]
   lr: 0.0001
-  weight_decay: 0.01
+  weight_decay: 0.1

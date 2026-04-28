@@ -1,20 +1,19 @@
+trainer:
+  panel_virtual_batch:
+    enabled: false
+    virtual_symbol_day_batch_size: 64   # 旧版 batch_size
+    shuffle_pairs: true
+    
 data:
-  train_dataloader:
-    batch_size: 128
-    shuffle: true
-    num_workers: 4
-    persistent_workers: true
-    pin_memory: true
-    prefetch_factor: 2
-  val_dataloader:
-    batch_size: 128
-    shuffle: false
-    num_workers: 4
-    persistent_workers: true
-    pin_memory: true
-    prefetch_factor: 2
   dataset:
     data_path: "data/data.parquet"
+    sample_layout: market_day
+
+    symbol_col: Symbol
+    time_col: Time
+    target_cols:
+      - ret_30min
+
     feature_cols:
       continuous:
         - feature_mtm_5_zscore10_neutralized
@@ -82,7 +81,22 @@ data:
         - feature_min_path_2_zscore2
         - feature_corr_CS3_3
         - feature_brar_br_10_zscore3
-      categorical:
-        - Symbol
-        - DATA_sector
-        - DATA_month
+
+    return_meta: false
+    validate_unique: true
+
+  train_dataloader:
+    batch_size: 4
+    shuffle: true
+    num_workers: 2
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
+
+  val_dataloader:
+    batch_size: 4
+    shuffle: false
+    num_workers: 2
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2

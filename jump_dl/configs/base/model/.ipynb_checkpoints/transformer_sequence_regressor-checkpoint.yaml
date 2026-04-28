@@ -3,7 +3,9 @@ model:
   encoder:
     name: tabular_sequence
     numeric_feature_groups: [continuous]
-    categorical_cols: []
+    context_feature_groups: [market_state]
+    include_raw_numeric: true
+    categorical_cols: ["Symbol", "DATA_sector", "DATA_month"]
     categorical_embedding_dim: 8
     model_dim: 256
   backbone:
@@ -16,12 +18,18 @@ model:
     ffn_activation: swiglu
     norm_type: rmsnorm
     norm_eps: 1.0e-6
-    residual_scale: 1.0
     qk_norm: true
     attention_gate: true
     max_seq_len: 4096
     position_encoding: rope
     causal: true
+    use_moe: false
+    num_experts: 4
+    expert_hidden_size: 256
+    top_k: 2
+    aux_loss_weight: 1.0e-2
+    router_z_loss_weight: 1.0e-3
+    shared_experts: 0
   head:
     name: sequence_regression
     target_key: ret_30min
@@ -43,3 +51,10 @@ model:
   attention_gate: true
   max_seq_len: 4096
   position_encoding: rope
+  causal: true
+  use_moe: false
+  num_experts: 8
+  top_k: 2
+  aux_loss_weight: 1.0e-2
+  router_z_loss_weight: 0
+  shared_experts: 0
