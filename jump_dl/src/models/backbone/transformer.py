@@ -424,8 +424,22 @@ class TransformerSequenceBackbone(BaseBackbone):
                     in_range = (_ >= start) and (end is None or _ <= int(end)) and (((_ - start) % max(every,1)) == 0)
                     if in_range:
                         sub = list(cfg.get("sublayers", [{"type":"attention"},{"type":"moe_ffn" if use_moe else "ffn"}]))
-                        lay = {"type": "multiresolution" if mr_place=="block" else "patch_memory", "scales": mr_cfg.get("scales", [5,15,30]), "conv_type": mr_cfg.get("conv_type", "depthwise"), "fusion": mr_cfg.get("fusion", "softmax_gate"), "multires_dropout": mr_cfg.get("dropout", 0.0), "multires_residual_scale": mr_cfg.get("residual_scale", 1.0)}
-                        if mr_place == "patch_memory":
+                        if mr_place == "block":
+                            lay = {
+                                "type": "multiresolution",
+                                "scales": mr_cfg.get("scales", [5, 15, 30]),
+                                "conv_type": mr_cfg.get("conv_type", "depthwise"),
+                                "fusion": mr_cfg.get("fusion", "softmax_gate"),
+                                "multires_dropout": mr_cfg.get("dropout", 0.0),
+                                "multires_residual_scale": mr_cfg.get("residual_scale", 1.0),
+                            }
+                        else:
+                            lay = {
+                                "type": "patch_memory",
+                                "scales": mr_cfg.get("scales", [5, 15, 30]),
+                                "multires_dropout": mr_cfg.get("dropout", 0.0),
+                                "multires_residual_scale": mr_cfg.get("residual_scale", 1.0),
+                            }
                             pm = dict(mr_cfg.get("patch_memory", {}))
                             lay.update({"num_heads": pm.get("num_heads", num_heads), "include_partial_patch": pm.get("include_partial_patch", False), "max_patches": pm.get("max_patches", None)})
                         sub.insert(1, lay)
