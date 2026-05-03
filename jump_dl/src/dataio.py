@@ -68,7 +68,7 @@ class SliceBatchDataset(Dataset):
         self.time_col = time_col
         self.return_meta = return_meta
 
-        with open("/root/autodl-tmp/dl/jump_dl/artifacts/vocabs.pkl", "rb") as f:
+        with open("/root/autodl-tmp/jump/jump_dl/artifacts/vocabs.pkl", "rb") as f:
             vocabs = pickle.load(f)
 
         for col in vocabs:

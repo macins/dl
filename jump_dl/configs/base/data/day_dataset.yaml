@@ -86,7 +86,7 @@ data:
     validate_unique: true
 
   train_dataloader:
-    batch_size: 2
+    batch_size: 4
     shuffle: true
     num_workers: 2
     pin_memory: true
@@ -94,7 +94,7 @@ data:
     prefetch_factor: 2
 
   trainer:
-    grad_accum_steps: 2
+    grad_accum_steps: 1
 
   val_dataloader:
     batch_size: 4
