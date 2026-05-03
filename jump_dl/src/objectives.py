@@ -125,6 +125,7 @@ class CosineSimilarityObjective(nn.Module):
         pred_inc_key: str = "pred_inc",
         pred_cum_key: str = "pred_cum",
         target_inc_key: str | None = None,
+        target_inc_keys: list[str] | tuple[str, ...] | None = None,
         target_cum_key: str | None = None,
         aux_cum_huber_weight: float = 0.0,
         aux_inc_huber_weight: float = 0.0,
@@ -153,6 +154,7 @@ class CosineSimilarityObjective(nn.Module):
         self.pred_inc_key = str(pred_inc_key)
         self.pred_cum_key = str(pred_cum_key)
         self.target_inc_key = None if target_inc_key is None else str(target_inc_key)
+        self.target_inc_keys = None if target_inc_keys is None else [str(v) for v in target_inc_keys]
         self.target_cum_key = None if target_cum_key is None else str(target_cum_key)
         self.aux_cum_huber_weight = float(aux_cum_huber_weight)
         self.aux_inc_huber_weight = float(aux_inc_huber_weight)
@@ -830,6 +832,22 @@ class CosineSimilarityObjective(nn.Module):
 
         if pred_inc is not None and self.target_inc_key is not None:
             target_inc = self._get_target_by_key(batch, self.target_inc_key).float()
+            if target_inc.shape != pred_inc.shape:
+                raise ValueError(
+                    f"Increment target shape mismatch: pred={tuple(pred_inc.shape)}, "
+                    f"target={tuple(target_inc.shape)}."
+                )
+            mask_h = valid.unsqueeze(-1).expand_as(pred_inc)
+            w_h = w.unsqueeze(-1).expand_as(pred_inc)
+            inc_huber = F.huber_loss(pred_inc.float(), target_inc, delta=self.aux_huber_delta, reduction="none")
+            inc_huber = torch.where(mask_h, inc_huber, torch.zeros_like(inc_huber))
+            denom = torch.sum(w_h).clamp_min(self.eps)
+            aux_inc_huber = torch.sum(inc_huber * w_h) / denom
+            aux_loss_total = aux_loss_total + self.aux_inc_huber_weight * aux_inc_huber
+            path_aux_metrics["aux_inc_huber"] = float(aux_inc_huber.detach().item())
+        elif pred_inc is not None and self.target_inc_keys:
+            parts = [self._get_target_by_key(batch, key).float() for key in self.target_inc_keys]
+            target_inc = torch.stack(parts, dim=-1)
             if target_inc.shape != pred_inc.shape:
                 raise ValueError(
                     f"Increment target shape mismatch: pred={tuple(pred_inc.shape)}, "

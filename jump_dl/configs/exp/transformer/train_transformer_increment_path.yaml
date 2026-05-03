@@ -1,0 +1,57 @@
+inherits:
+  - ../../base/common/runtime.yaml
+  - ../../base/objective/cosine_regression.yaml
+  - ../../base/data/day_dataset.yaml
+  - ../../base/data/train_val_split_2013_2019.yaml
+  - ../../base/model/transformer_sequence_regressor.yaml
+  - ../../base/optimizer/adamw.yaml
+  - ../../base/scheduler/cosine_60.yaml
+  - ../../base/trainer/default.yaml
+
+output_dir: workdirs/jump_dl/transformer_increment_path
+
+model:
+  name: transformer_panel_regressor
+  target_key: ret_30min
+
+  head:
+    name: increment_path
+    target_key: ret_30min
+    num_horizons: 6
+    path_key: path
+    use_layer_norm: true
+
+objective:
+  name: cosine_similarity
+  pred_key: ret_30min
+  target_key: ret_30min
+  target_inc_keys:
+    - ret_0_5min
+    - ret_5_10min
+    - ret_10_15min
+    - ret_15_20min
+    - ret_20_25min
+    - ret_25_30min
+  aux_cum_huber_weight: 0.0
+  aux_inc_huber_weight: 0.01
+  aux_huber_delta: 1.0
+  aux_horizon_weights: [0.4, 0.6, 0.8, 1.0, 1.1, 1.2]
+
+  loss_weights:
+    cos: 1.0
+    mse: 0.0
+    mog_nll: 0.0
+    usage_kl: 0.0
+    scale_reg: 0.0
+    aux: 1.0
+
+data:
+  dataset:
+    target_cols:
+      - ret_30min
+      - ret_0_5min
+      - ret_5_10min
+      - ret_10_15min
+      - ret_15_20min
+      - ret_20_25min
+      - ret_25_30min
