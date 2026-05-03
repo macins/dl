@@ -6,6 +6,7 @@ from typing import Any, Optional
 from ..base import BaseBackbone
 from ..layers import build_block
 from ..layers.transformer import PositionEmbedding
+from ..layers.multiresolution import MultiResolutionStem
 from .registry import register_backbone
 from ...utils.externals import ensure_torch
 
@@ -292,6 +293,7 @@ class TransformerSequenceBackbone(BaseBackbone):
         # If a custom block does not define `attention_projection_sharing`, then
         # the global value is used as default.
         blocks: Sequence[Mapping[str, object]] | None = None,
+        multi_resolution: Mapping[str, object] | None = None,
     ) -> None:
         super().__init__()
 
@@ -302,6 +304,12 @@ class TransformerSequenceBackbone(BaseBackbone):
         self.output_dim = int(hidden_size)
 
         self.position_encoding = str(position_encoding).strip().lower()
+        self.multi_resolution_stem = None
+        self._multires_layers: list[int] = []
+        mr_cfg = dict(multi_resolution or {})
+        mr_enabled = bool(mr_cfg.get("enabled", False))
+        mr_place = str(mr_cfg.get("placement", "none")).strip().lower()
+
         self.attention_projection_sharing = attention_projection_sharing
 
         self.use_register_tokens = bool(use_register_tokens)
@@ -409,6 +417,34 @@ class TransformerSequenceBackbone(BaseBackbone):
                 if default_sublayers is not None:
                     cfg["sublayers"] = default_sublayers
 
+                if mr_enabled and mr_place in {"block", "patch_memory"}:
+                    start = int(mr_cfg.get("start_layer", 0))
+                    end = mr_cfg.get("end_layer", None)
+                    every = int(mr_cfg.get("insert_every_n_layers", 1))
+                    in_range = (_ >= start) and (end is None or _ <= int(end)) and (((_ - start) % max(every,1)) == 0)
+                    if in_range:
+                        sub = list(cfg.get("sublayers", [{"type":"attention"},{"type":"moe_ffn" if use_moe else "ffn"}]))
+                        if mr_place == "block":
+                            lay = {
+                                "type": "multiresolution",
+                                "scales": mr_cfg.get("scales", [5, 15, 30]),
+                                "conv_type": mr_cfg.get("conv_type", "depthwise"),
+                                "fusion": mr_cfg.get("fusion", "softmax_gate"),
+                                "multires_dropout": mr_cfg.get("dropout", 0.0),
+                                "multires_residual_scale": mr_cfg.get("residual_scale", 1.0),
+                            }
+                        else:
+                            lay = {
+                                "type": "patch_memory",
+                                "scales": mr_cfg.get("scales", [5, 15, 30]),
+                                "multires_dropout": mr_cfg.get("dropout", 0.0),
+                                "multires_residual_scale": mr_cfg.get("residual_scale", 1.0),
+                            }
+                            pm = dict(mr_cfg.get("patch_memory", {}))
+                            lay.update({"num_heads": pm.get("num_heads", num_heads), "include_partial_patch": pm.get("include_partial_patch", False), "max_patches": pm.get("max_patches", None)})
+                        sub.insert(1, lay)
+                        cfg["sublayers"] = sub
+
                 block_cfgs.append(cfg)
 
         else:
@@ -452,6 +488,16 @@ class TransformerSequenceBackbone(BaseBackbone):
                 cfg.setdefault("codebook_position", codebook_position)
 
                 block_cfgs.append(cfg)
+
+        if mr_enabled and mr_place == "stem":
+            self.multi_resolution_stem = MultiResolutionStem(
+                d_model=self.hidden_size,
+                scales=mr_cfg.get("scales", [5, 15, 30]),
+                dropout=float(mr_cfg.get("dropout", 0.0)),
+                conv_type=str(mr_cfg.get("conv_type", "depthwise")),
+                fusion=str(mr_cfg.get("fusion", "softmax_gate")),
+                residual_scale=float(mr_cfg.get("residual_scale", 1.0)),
+            )
 
         self.blocks = nn.ModuleList(
             [
@@ -503,6 +549,9 @@ class TransformerSequenceBackbone(BaseBackbone):
 
         if self.input_position is not None:
             x = self.input_position.add_to_input(x)
+        if self.multi_resolution_stem is not None:
+            x = self.multi_resolution_stem(x)
+            self.last_aux_metrics.update(self.multi_resolution_stem.get_aux_stats())
 
         for block_idx, block in enumerate(self.blocks):
             x = block(x, padding_mask=padding_mask)
