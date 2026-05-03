@@ -1,0 +1,18 @@
+inherits:
+  - train_transformer_alibi_moe_multihorizon_aux_fixed.yaml
+
+output_dir: workdirs/jump_dl/transformer_alibi_moe_multihorizon_horizon_query
+
+model:
+  multi_horizon:
+    enabled: true
+    mode: horizon_query_decoder
+    horizons: [5, 10, 15, 30, 60]
+    main_horizon: 30
+    horizon_query_decoder:
+      num_heads: 4
+      dropout: 0.0
+      use_horizon_embedding: true
+      use_layer_norm: true
+      residual_init: 0.0
+      attend_mode: own_history
