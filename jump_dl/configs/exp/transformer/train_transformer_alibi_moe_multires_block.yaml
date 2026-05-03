@@ -16,7 +16,7 @@ model:
   backbone:
     position_encoding: alibi
     use_moe: true
-    num_experts: 8
+    num_experts: 4
     top_k: 2
     aux_loss_weight: 1.0e-2
     router_z_loss_weight: 0
