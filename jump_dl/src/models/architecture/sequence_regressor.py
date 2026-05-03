@@ -8,7 +8,7 @@ from ..backbone import build_backbone
 from ..encoder import build_encoder
 from ..head import build_head
 from ..registry import register_model
-from ..layers import SymbolQueryDecoder
+from ..layers import SymbolQueryDecoder, LongTermMemoryRead, PersistentMemoryBank, PrecomputedMemoryEncoder
 from ..head.multi_horizon import MultiHorizonHeads, HorizonQueryDecoder
 
 
@@ -61,6 +61,7 @@ class _BaseSequenceRegressor(BaseModel):
         default_backbone_kwargs: Mapping[str, object] | None = None,
         symbol_query_decoder: Mapping[str, object] | None = None,
         multi_horizon: Mapping[str, object] | None = None,
+        long_term_memory: Mapping[str, object] | None = None,
     ) -> None:
         super().__init__()
 
@@ -108,6 +109,51 @@ class _BaseSequenceRegressor(BaseModel):
             sqd_cfg.setdefault("d_model", self.backbone.output_dim)
             self.symbol_query_decoder = SymbolQueryDecoder(**sqd_cfg)
 
+        ltm_cfg = dict(long_term_memory or {})
+        self.long_term_memory_cfg = ltm_cfg
+        self.long_term_memory_enabled = bool(ltm_cfg.get("enabled", False))
+        self.long_term_memory_read = None
+        self.long_term_memory_batch_key = str(ltm_cfg.get("precomputed", {}).get("batch_key", "rolling_memory"))
+        self.long_term_memory_mode = str(ltm_cfg.get("mode", "persistent"))
+        if self.long_term_memory_enabled:
+            d_model = int(ltm_cfg.get("d_model") or self.backbone.output_dim)
+            memory_levels = list(ltm_cfg.get("memory_levels", ["market"]))
+            persistent_bank = None
+            if self.long_term_memory_mode in {"persistent", "persistent_plus_precomputed"}:
+                persistent_bank = PersistentMemoryBank(
+                    d_model=d_model,
+                    num_market_slots=int(ltm_cfg.get("num_market_slots", 16)),
+                    num_symbol_slots=int(ltm_cfg.get("num_symbol_slots", 0)),
+                    num_symbols=ltm_cfg.get("num_symbols"),
+                    memory_levels=memory_levels,
+                )
+            precomputed_encoder = None
+            if self.long_term_memory_mode in {"precomputed_context", "persistent_plus_precomputed"}:
+                pre_cfg = dict(ltm_cfg.get("precomputed", {}))
+                sdim = pre_cfg.get("summary_dim")
+                if sdim is not None:
+                    precomputed_encoder = PrecomputedMemoryEncoder(
+                        summary_dim=int(sdim),
+                        d_model=d_model,
+                        num_summary_slots=int(pre_cfg.get("num_summary_slots", 4)),
+                        encoder_type=str(pre_cfg.get("encoder_type", "mlp")),
+                        pooling=str(pre_cfg.get("pooling", "mean")),
+                        include_market_summary=bool(pre_cfg.get("include_market_summary", True)),
+                        include_symbol_summary=bool(pre_cfg.get("include_symbol_summary", True)),
+                    )
+            self.long_term_memory_read = LongTermMemoryRead(
+                d_model=d_model,
+                num_heads=int(ltm_cfg.get("num_heads", 4)),
+                dropout=float(ltm_cfg.get("dropout", 0.0)),
+                residual_init=float(ltm_cfg.get("residual_init", 0.0)),
+                use_layer_norm=bool(ltm_cfg.get("use_layer_norm", True)),
+                use_gate=bool(ltm_cfg.get("use_gate", True)),
+                gate_type=str(ltm_cfg.get("gate_type", "scalar")),
+                read_mode=str(ltm_cfg.get("read_mode", "gated_cross_attn")),
+                persistent_bank=persistent_bank,
+                precomputed_encoder=precomputed_encoder,
+            )
+
         mh_cfg = dict(multi_horizon or {})
         self.multi_horizon_enabled = bool(mh_cfg.get("enabled", False))
         self.multi_horizon_horizons = [int(h) for h in mh_cfg.get("horizons", [30])]
@@ -142,6 +188,13 @@ class _BaseSequenceRegressor(BaseModel):
         x = self.backbone(x, padding_mask=padding_mask)
         if self.symbol_query_decoder is not None:
             x = self.symbol_query_decoder(x, symbol_ids=batch.get("symbol_ids"))
+        if self.long_term_memory_enabled and self.long_term_memory_read is not None:
+            precomputed_memory = None
+            if self.long_term_memory_mode in {"precomputed_context", "persistent_plus_precomputed"}:
+                if self.long_term_memory_batch_key not in batch:
+                    raise KeyError(f"Missing required precomputed memory batch key: {self.long_term_memory_batch_key}")
+                precomputed_memory = batch[self.long_term_memory_batch_key]
+            x = self.long_term_memory_read(x, symbol_ids=batch.get("symbol_ids"), precomputed_memory=precomputed_memory)
         out = self.head(x)
 
         if self.multi_horizon_enabled:
@@ -162,6 +215,8 @@ class _BaseSequenceRegressor(BaseModel):
         aux_metrics = dict(getattr(self.backbone, "last_aux_metrics", {}))
         if self.symbol_query_decoder is not None:
             aux_metrics.update(self.symbol_query_decoder.get_aux_stats())
+        if self.long_term_memory_enabled and self.long_term_memory_read is not None:
+            aux_metrics.update(self.long_term_memory_read.get_aux_stats())
 
         if aux_losses:
             out["aux_losses"] = aux_losses
