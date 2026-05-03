@@ -8,6 +8,7 @@ from ..utils.externals import ensure_torch
 
 torch = ensure_torch()
 nn = torch.nn
+from torch.nn.parameter import UninitializedBuffer, UninitializedParameter
 
 
 @dataclass
@@ -83,6 +84,9 @@ class NexusEngine:
         )
 
     def _validate_alignment(self) -> None:
+        def _is_uninitialized(x: Any) -> bool:
+            return isinstance(x, (UninitializedParameter, UninitializedBuffer))
+
         main_params = list(self.model.named_parameters())
         inner_params = list(self.inner_model.named_parameters())
         if len(main_params) != len(inner_params):
@@ -90,6 +94,8 @@ class NexusEngine:
         for (mn, mp), (inn, ip) in zip(main_params, inner_params):
             if mn != inn:
                 raise ValueError(f"Main/inner parameter name mismatch: {mn} vs {inn}")
+            if _is_uninitialized(mp) or _is_uninitialized(ip):
+                continue
             if tuple(mp.shape) != tuple(ip.shape):
                 raise ValueError(f"Main/inner parameter shape mismatch on {mn}")
             ip.requires_grad_(mp.requires_grad)

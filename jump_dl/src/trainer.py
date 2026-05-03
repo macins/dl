@@ -558,14 +558,7 @@ class Trainer:
         if nexus_enabled:
             if hasattr(self.model, "module"):
                 raise NotImplementedError("Nexus with DDP is not implemented yet")
-            self.nexus_engine = NexusEngine(
-                model=self.model,
-                inner_lr=self.config.nexus.inner_lr,
-                eps=self.config.nexus.eps,
-                normalize_scope=self.config.nexus.normalize_scope,
-                copy_buffers=self.config.nexus.copy_buffers,
-            )
-            self.nexus_engine.sync_inner_from_main()
+            self.nexus_engine = None
 
         try:
             progress = self._iter_with_progress(dataloader, train=train, epoch=epoch)
@@ -607,6 +600,20 @@ class Trainer:
                             epoch=epoch,
                         )
                     else:
+                        if self.nexus_engine is None:
+                            # Initialize lazy parameters/buffers on the main model first,
+                            # so NexusEngine can safely validate/sync lazy modules.
+                            with torch.no_grad():
+                                _ = run_model(step_batch)
+                            self.nexus_engine = NexusEngine(
+                                model=self.model,
+                                inner_lr=self.config.nexus.inner_lr,
+                                eps=self.config.nexus.eps,
+                                normalize_scope=self.config.nexus.normalize_scope,
+                                copy_buffers=self.config.nexus.copy_buffers,
+                            )
+                            self.nexus_engine.sync_inner_from_main()
+
                         self._set_objective_progress(train=train, epoch=epoch)
                         amp_dtype = self._get_amp_dtype()
                         amp_enabled = self._amp_enabled()
