@@ -21,12 +21,39 @@ model:
     path_key: path
     use_layer_norm: true
 
+    
+  backbone:
+    name: transformer_sequence
+    hidden_size: 256
+    num_layers: 2
+    dropout: 0.1
+    num_heads: 8
+    causal: true
+    position_encoding: alibi
+
+    attention_projection_sharing: v
+    
+    sublayers:
+      - type: attention
+      
+      - type: temporal_gru
+        gru_hidden_size: 384
+        gru_num_layers: 1
+        output_zero_init: true
+
+      - type: moe_ffn
+        ffn_hidden_size: 384
+    use_register_tokens: true
+    num_register_tokens: 4
+    register_axis: symbol
+    return_register_tokens: false
+    
 objective:
   name: cosine_similarity
   pred_key: ret_30min
   target_key: ret_30min
   target_inc_keys:
-    - ret_0_5min
+    - ret_5min
     - ret_5_10min
     - ret_10_15min
     - ret_15_20min
@@ -49,7 +76,7 @@ data:
   dataset:
     target_cols:
       - ret_30min
-      - ret_0_5min
+      - ret_5min
       - ret_5_10min
       - ret_10_15min
       - ret_15_20min
