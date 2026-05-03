@@ -5,7 +5,7 @@ import json
 import random
 from datetime import date
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 import polars as pl
