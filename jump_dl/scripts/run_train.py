@@ -657,6 +657,44 @@ def _resolve_run_output_dir(cfg: Mapping[str, Any], args: argparse.Namespace) ->
 
     return base_output_dir / "__".join(parts)
 
+
+
+def _maybe_fill_multi_horizon_label_stats(
+    objective_cfg: Mapping[str, Any],
+    target_stats: Mapping[str, Mapping[str, float]],
+) -> dict[str, Any]:
+    out = dict(objective_cfg)
+    mh = out.get("multi_horizon")
+    if not isinstance(mh, Mapping):
+        return out
+    mh_out = dict(mh)
+    if not bool(mh_out.get("enabled", False)):
+        out["multi_horizon"] = mh_out
+        return out
+    if not bool(mh_out.get("normalize_per_horizon", True)):
+        out["multi_horizon"] = mh_out
+        return out
+
+    label_keys = mh_out.get("label_keys", {})
+    if not isinstance(label_keys, Mapping):
+        out["multi_horizon"] = mh_out
+        return out
+
+    label_std = dict(mh_out.get("label_std", {}))
+    label_mean = dict(mh_out.get("label_mean", {}))
+    for hz_k, lbl in label_keys.items():
+        key = str(lbl)
+        stats = target_stats.get(key, {})
+        if label_std.get(hz_k) is None:
+            std = float(stats.get("std", 1.0) or 1.0)
+            label_std[hz_k] = std
+        if label_mean.get(hz_k) is None:
+            label_mean[hz_k] = float(stats.get("mean", 0.0))
+
+    mh_out["label_std"] = label_std
+    mh_out["label_mean"] = label_mean
+    out["multi_horizon"] = mh_out
+    return out
 def _build_objective(
     cfg: Mapping[str, Any],
     *,
@@ -664,6 +702,7 @@ def _build_objective(
     target_stats: Mapping[str, Mapping[str, float]],
 ) -> CosineSimilarityObjective:
     objective_cfg = dict(cfg.get("objective", {}))
+    objective_cfg = _maybe_fill_multi_horizon_label_stats(objective_cfg, target_stats)
 
     objective_name = str(
         objective_cfg.get("name", objective_cfg.get("type", "cosine_similarity"))
@@ -731,6 +770,7 @@ def _build_objective(
         aux_inc_huber_weight=float(objective_cfg.get("aux_inc_huber_weight", 0.0)),
         aux_huber_delta=float(objective_cfg.get("aux_huber_delta", 1.0)),
         aux_horizon_weights=objective_cfg.get("aux_horizon_weights"),
+        multi_horizon=objective_cfg.get("multi_horizon"),
     )
 
     inc_keys_cfg = objective_cfg.get("target_inc_keys")

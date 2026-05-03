@@ -1,0 +1,23 @@
+inherits:
+  - train_transformer_alibi_moe.yaml
+
+output_dir: workdirs/jump_dl/transformer_alibi_moe_multihorizon_aux_fixed
+
+model:
+  multi_horizon:
+    enabled: true
+    mode: aux_heads
+    horizons: [5, 10, 15, 30, 60]
+    main_horizon: 30
+
+objective:
+  multi_horizon:
+    enabled: true
+    horizons: [5, 10, 15, 30, 60]
+    main_horizon: 30
+    label_keys: {5: ret_5min, 10: ret_10min, 15: ret_15min, 30: ret_30min, 60: ret_60min}
+    loss:
+      type: global_cosine
+      main_weight: 1.0
+      aux_weights: {5: 0.1, 10: 0.1, 15: 0.1, 60: 0.03}
+      aux_schedule: {enabled: false}
