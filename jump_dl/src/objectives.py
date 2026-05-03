@@ -759,14 +759,32 @@ class CosineSimilarityObjective(nn.Module):
 
     def _extract_horizon_labels(self, batch: dict) -> dict[int, torch.Tensor]:
         targets = batch.get("targets")
-        if not isinstance(targets, Mapping):
-            raise TypeError("multi_horizon.enabled=true requires batch['targets'] mapping.")
         out: dict[int, torch.Tensor] = {}
         for hz in self.multi_horizon_horizons:
             key = self.multi_horizon_label_keys.get(hz)
-            if key is None or key not in targets:
-                raise KeyError(f"Missing label for horizon={hz}. Expected key={key!r} in batch['targets'].")
-            y = targets[key]
+            if key is None:
+                raise KeyError(f"Missing label key config for horizon={hz}. Please set objective.multi_horizon.label_keys[{hz}].")
+
+            if isinstance(targets, Mapping):
+                if key not in targets:
+                    raise KeyError(f"Missing label for horizon={hz}. Expected key={key!r} in batch['targets'] mapping.")
+                y = targets[key]
+            elif torch.is_tensor(targets):
+                cols = batch.get("target_col_names")
+                if not isinstance(cols, (list, tuple)) or key not in cols:
+                    raise KeyError(
+                        f"Missing label for horizon={hz}. targets is tensor, but key={key!r} not found in batch['target_col_names']={cols!r}."
+                    )
+                idx = int(list(cols).index(key))
+                y = targets[..., idx]
+            else:
+                raise TypeError(
+                    "multi_horizon.enabled=true requires batch['targets'] to be either a mapping, "
+                    "or a tensor with batch['target_col_names']."
+                )
+
+            if not torch.is_tensor(y):
+                raise TypeError(f"Horizon label {key!r} must be tensor, got {type(y)!r}.")
             if y.ndim > 3 and y.shape[-1] == 1:
                 y = y[..., 0]
             if self.multi_horizon_norm_per_h and self.multi_horizon_label_std.get(hz) not in (None, 0):
