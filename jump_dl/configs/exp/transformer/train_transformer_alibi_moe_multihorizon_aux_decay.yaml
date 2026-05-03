@@ -1,0 +1,15 @@
+inherits:
+  - train_transformer_alibi_moe_multihorizon_aux_fixed.yaml
+
+output_dir: workdirs/jump_dl/transformer_alibi_moe_multihorizon_aux_decay
+
+objective:
+  multi_horizon:
+    loss:
+      aux_schedule:
+        enabled: true
+        schedule_type: cosine_decay
+        start_weight_multiplier: 2.0
+        final_weight_multiplier: 0.2
+        start_step: 0
+        end_step: null
