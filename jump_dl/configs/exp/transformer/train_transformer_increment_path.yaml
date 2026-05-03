@@ -14,14 +14,6 @@ model:
   name: transformer_panel_regressor
   target_key: ret_30min
 
-  head:
-    name: increment_path
-    target_key: ret_30min
-    num_horizons: 4
-    path_key: path
-    use_layer_norm: true
-
-    
   backbone:
     name: transformer_sequence
     hidden_size: 256
@@ -47,16 +39,6 @@ model:
     num_register_tokens: 4
     register_axis: symbol
     return_register_tokens: false
-
-  symbol_query_decoder:
-    enabled: true
-    mode: full_causal
-    num_heads: 4
-    dropout: 0.0
-    residual_init: 0.1
-    use_symbol_embedding: true
-    use_layer_norm: true
-    exclude_self: false
 
 objective:
   name: cosine_similarity

@@ -1,41 +1,41 @@
 model:
-  name: transformer_sequence_regressor
-  encoder:
-    name: tabular_sequence
-    numeric_feature_groups: [continuous]
-    context_feature_groups: []
-    include_raw_numeric: true
-    categorical_cols: ["Symbol", "DATA_sector", "DATA_month"]
-    categorical_embedding_dim: 8
-    model_dim: 256
+  name: transformer_panel_regressor
+  target_key: ret_30min
+
+  head:
+    name: increment_path
+    target_key: ret_30min
+    num_horizons: 4
+    path_key: path
+    use_layer_norm: true
+
+    
   backbone:
     name: transformer_sequence
     hidden_size: 256
     num_layers: 2
-    num_heads: 8
     dropout: 0.1
-    ffn_hidden_size: 512
-    ffn_activation: swiglu
-    norm_type: rmsnorm
-    norm_eps: 1.0e-6
-    qk_norm: true
-    attention_gate: true
-    max_seq_len: 4096
-    position_encoding: alibi
+    num_heads: 8
     causal: true
-    use_moe: false
-    num_experts: 4
-    expert_hidden_size: 256
-    top_k: 2
-    aux_loss_weight: 1.0e-2
-    router_z_loss_weight: 0
-    shared_experts: 0
-    
-  head:
-    name: sequence_regression
-    target_key: ret_30min
-    output_dim: 1
-    use_layer_norm: true
+    position_encoding: alibi
+
+    attention_projection_sharing: v
+      
+    sublayers:
+      - type: attention
+      
+      - type: temporal_gru
+        gru_hidden_size: 384
+        gru_num_layers: 1
+        output_zero_init: true
+        
+      - type: moe_ffn
+        ffn_hidden_size: 384
+    use_register_tokens: true
+    num_register_tokens: 4
+    register_axis: symbol
+    return_register_tokens: false
+
   numeric_feature_groups: [continuous]
   categorical_cols: []
   hidden_size: 256
