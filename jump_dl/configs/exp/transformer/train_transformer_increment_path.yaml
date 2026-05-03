@@ -32,20 +32,14 @@ model:
     position_encoding: alibi
 
     attention_projection_sharing: v
-    
-    multi_resolution:
-      enabled: true
-      placement: block
-      scales: [5, 15, 30, 45]
-      fusion: softmax_gate
-      conv_type: depthwise
-      dropout: 0.0
-      residual_scale: 1.0
-      insert_every_n_layers: 1
-      start_layer: 1
       
     sublayers:
       - type: attention
+      
+      - type: temporal_gru
+        gru_hidden_size: 384
+        gru_num_layers: 1
+        output_zero_init: true
         
       - type: moe_ffn
         ffn_hidden_size: 384
@@ -53,7 +47,17 @@ model:
     num_register_tokens: 4
     register_axis: symbol
     return_register_tokens: false
-    
+
+  symbol_query_decoder:
+    enabled: true
+    mode: full_causal
+    num_heads: 4
+    dropout: 0.0
+    residual_init: 0.1
+    use_symbol_embedding: true
+    use_layer_norm: true
+    exclude_self: false
+
 objective:
   name: cosine_similarity
   pred_key: ret_30min
