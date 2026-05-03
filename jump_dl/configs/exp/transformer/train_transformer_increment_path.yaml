@@ -33,13 +33,19 @@ model:
 
     attention_projection_sharing: v
     
+    multi_resolution:
+      enabled: true
+      placement: block
+      scales: [5, 15, 30, 45]
+      fusion: softmax_gate
+      conv_type: depthwise
+      dropout: 0.0
+      residual_scale: 1.0
+      insert_every_n_layers: 1
+      start_layer: 1
+      
     sublayers:
       - type: attention
-      
-      - type: temporal_gru
-        gru_hidden_size: 384
-        gru_num_layers: 1
-        output_zero_init: true
         
       - type: moe_ffn
         ffn_hidden_size: 384
@@ -64,7 +70,7 @@ objective:
 
   loss_weights:
     cos: 1.0
-    mse: 0.05
+    mse: 0.01
     mog_nll: 0.0
     usage_kl: 0.0
     scale_reg: 0.0
