@@ -8,10 +8,6 @@ inherits:
   - ../../base/scheduler/cosine_60.yaml
   - ../../base/trainer/default.yaml
 
-data:
-  train_dataloader:
-    shuffle: false
-
 output_dir: workdirs/jump_dl/transformer_increment_path
 
 model:
@@ -68,7 +64,7 @@ objective:
 
   loss_weights:
     cos: 1.0
-    mse: 0.0
+    mse: 0.05
     mog_nll: 0.0
     usage_kl: 0.0
     scale_reg: 0.0
