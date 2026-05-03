@@ -719,10 +719,18 @@ def _build_objective(
         use_sample_weight=bool(objective_cfg.get("use_sample_weight", False)),
         weight_key=str(objective_cfg.get("weight_key", "weight")),
         eps=float(objective_cfg.get("eps", 1e-12)),
+        path_key=str(objective_cfg.get("path_key", "path")),
+        pred_inc_key=str(objective_cfg.get("pred_inc_key", "pred_inc")),
+        pred_cum_key=str(objective_cfg.get("pred_cum_key", "pred_cum")),
         target_inc_key=objective_cfg.get("target_inc_key"),
         target_inc_keys=objective_cfg.get("target_inc_keys"),
         target_inc_means=objective_cfg.get("target_inc_means"),
         target_inc_stds=objective_cfg.get("target_inc_stds"),
+        target_cum_key=objective_cfg.get("target_cum_key"),
+        aux_cum_huber_weight=float(objective_cfg.get("aux_cum_huber_weight", 0.0)),
+        aux_inc_huber_weight=float(objective_cfg.get("aux_inc_huber_weight", 0.0)),
+        aux_huber_delta=float(objective_cfg.get("aux_huber_delta", 1.0)),
+        aux_horizon_weights=objective_cfg.get("aux_horizon_weights"),
     )
 
     inc_keys_cfg = objective_cfg.get("target_inc_keys")

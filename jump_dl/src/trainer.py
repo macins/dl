@@ -842,6 +842,39 @@ class Trainer:
             if key == "epoch":
                 continue
             if isinstance(value, (int, float)):
+                self.tb_writer.add_scalar(self._tb_tag_for_key(str(key)), float(value), epoch)
+
+        if self.optimizer.param_groups:
+            self.tb_writer.add_scalar("optim/lr", float(self.optimizer.param_groups[0]["lr"]), epoch)
+
+    @staticmethod
+    def _tb_tag_for_key(key: str) -> str:
+        scope = "epoch"
+        name = key
+        if key.startswith("train_"):
+            scope = "train"
+            name = key[len("train_"):]
+        elif key.startswith("val_"):
+            scope = "val"
+            name = key[len("val_"):]
+
+        metric_names = {
+            "cosine_similarity",
+            "step_cosine_similarity",
+            "mse",
+            "mse_raw",
+            "mog_nll",
+        }
+        if name in metric_names:
+            group = "metrics"
+        elif name.startswith("loss_weight_"):
+            group = "weights"
+        elif "loss" in name:
+            group = "losses"
+        else:
+            group = "others"
+
+        return f"{scope}/{group}/{name}"
                 self.tb_writer.add_scalar(str(key), float(value), epoch)
 
         if self.optimizer.param_groups:
