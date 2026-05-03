@@ -9,6 +9,7 @@ from ..encoder import build_encoder
 from ..head import build_head
 from ..registry import register_model
 from ..layers import SymbolQueryDecoder
+from ..head.multi_horizon import MultiHorizonHeads, HorizonQueryDecoder
 
 
 def _merge_config(
@@ -59,6 +60,7 @@ class _BaseSequenceRegressor(BaseModel):
         default_backbone_name: str = "gru_sequence",
         default_backbone_kwargs: Mapping[str, object] | None = None,
         symbol_query_decoder: Mapping[str, object] | None = None,
+        multi_horizon: Mapping[str, object] | None = None,
     ) -> None:
         super().__init__()
 
@@ -106,6 +108,33 @@ class _BaseSequenceRegressor(BaseModel):
             sqd_cfg.setdefault("d_model", self.backbone.output_dim)
             self.symbol_query_decoder = SymbolQueryDecoder(**sqd_cfg)
 
+        mh_cfg = dict(multi_horizon or {})
+        self.multi_horizon_enabled = bool(mh_cfg.get("enabled", False))
+        self.multi_horizon_horizons = [int(h) for h in mh_cfg.get("horizons", [30])]
+        self.multi_horizon_main = int(mh_cfg.get("main_horizon", 30))
+        self.multi_horizon_mode = str(mh_cfg.get("mode", "aux_heads"))
+        self.mh_decoder = None
+        self.mh_heads = None
+        if self.multi_horizon_enabled:
+            if self.multi_horizon_mode == "horizon_query_decoder":
+                dcfg = dict(mh_cfg.get("horizon_query_decoder", {}))
+                self.mh_decoder = HorizonQueryDecoder(
+                    d_model=self.backbone.output_dim,
+                    horizons=self.multi_horizon_horizons,
+                    num_heads=int(dcfg.get("num_heads", 4)),
+                    dropout=float(dcfg.get("dropout", 0.0)),
+                    use_horizon_embedding=bool(dcfg.get("use_horizon_embedding", True)),
+                    use_layer_norm=bool(dcfg.get("use_layer_norm", True)),
+                    residual_init=float(dcfg.get("residual_init", 0.0)),
+                    attend_mode=str(dcfg.get("attend_mode", "own_history")),
+                )
+            else:
+                self.mh_heads = MultiHorizonHeads(
+                    d_model=self.backbone.output_dim,
+                    horizons=self.multi_horizon_horizons,
+                    output_dim=1,
+                )
+
     def forward(self, batch: dict) -> dict:
         padding_mask = batch.get("padding_mask")
 
@@ -114,6 +143,20 @@ class _BaseSequenceRegressor(BaseModel):
         if self.symbol_query_decoder is not None:
             x = self.symbol_query_decoder(x, symbol_ids=batch.get("symbol_ids"))
         out = self.head(x)
+
+        if self.multi_horizon_enabled:
+            if self.mh_decoder is not None:
+                pred_by_hz, mh_aux = self.mh_decoder(x)
+            else:
+                pred_by_hz = self.mh_heads(x)
+                mh_aux = {}
+            if self.multi_horizon_main not in pred_by_hz:
+                raise ValueError(f"main_horizon={self.multi_horizon_main} not in horizons={self.multi_horizon_horizons}")
+            out["preds"][self.head.target_key] = pred_by_hz[self.multi_horizon_main]
+            out["pred_by_horizon"] = pred_by_hz
+            out.setdefault("aux_metrics", {}).update({"multi_horizon_enabled": 1.0})
+            if mh_aux:
+                out.setdefault("aux", {}).update(mh_aux)
 
         aux_losses = getattr(self.backbone, "last_aux_losses", {})
         aux_metrics = dict(getattr(self.backbone, "last_aux_metrics", {}))
