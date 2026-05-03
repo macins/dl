@@ -113,6 +113,7 @@ class IncrementPathHead(BaseHead):
         num_horizons: int = 6,
         use_layer_norm: bool = True,
         path_key: str = "path",
+        **kwargs, 
     ) -> None:
         super().__init__()
         self.input_dim = int(input_dim)

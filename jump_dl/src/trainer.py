@@ -875,6 +875,10 @@ class Trainer:
             group = "others"
 
         return f"{scope}/{group}/{name}"
+                self.tb_writer.add_scalar(str(key), float(value), epoch)
+
+        if self.optimizer.param_groups:
+            self.tb_writer.add_scalar("lr", float(self.optimizer.param_groups[0]["lr"]), epoch)
 
     def _is_better(self, current: float, best: float | None) -> bool:
         if best is None:
