@@ -263,6 +263,16 @@ class TransformerSequenceBackbone(BaseBackbone):
         #
         # This is block-local sharing, not cross-layer sharing.
         attention_projection_sharing: str | Sequence[str] | None = "none",
+        codebook_enabled: bool = False,
+        codebook_num_codes: int = 128,
+        codebook_num_heads: int = 4,
+        codebook_dropout: float = 0.0,
+        codebook_topk: int | None = None,
+        codebook_temperature: float = 1.0,
+        codebook_residual_gate_init: float = 0.0,
+        codebook_use_layernorm: bool = True,
+        codebook_share_kv: bool = False,
+        codebook_position: str = "after_ffn",
 
         # Register-token interface.
         # Default keeps the old behavior unchanged.
@@ -382,6 +392,16 @@ class TransformerSequenceBackbone(BaseBackbone):
 
                     # Forward block-local Q/K/V sharing mode to each block.
                     "attention_projection_sharing": attention_projection_sharing,
+                    "codebook_enabled": codebook_enabled,
+                    "codebook_num_codes": codebook_num_codes,
+                    "codebook_num_heads": codebook_num_heads,
+                    "codebook_dropout": codebook_dropout,
+                    "codebook_topk": codebook_topk,
+                    "codebook_temperature": codebook_temperature,
+                    "codebook_residual_gate_init": codebook_residual_gate_init,
+                    "codebook_use_layernorm": codebook_use_layernorm,
+                    "codebook_share_kv": codebook_share_kv,
+                    "codebook_position": codebook_position,
 
                     **register_cfg,
                 }
@@ -420,6 +440,16 @@ class TransformerSequenceBackbone(BaseBackbone):
                     "attention_projection_sharing",
                     attention_projection_sharing,
                 )
+                cfg.setdefault("codebook_enabled", codebook_enabled)
+                cfg.setdefault("codebook_num_codes", codebook_num_codes)
+                cfg.setdefault("codebook_num_heads", codebook_num_heads)
+                cfg.setdefault("codebook_dropout", codebook_dropout)
+                cfg.setdefault("codebook_topk", codebook_topk)
+                cfg.setdefault("codebook_temperature", codebook_temperature)
+                cfg.setdefault("codebook_residual_gate_init", codebook_residual_gate_init)
+                cfg.setdefault("codebook_use_layernorm", codebook_use_layernorm)
+                cfg.setdefault("codebook_share_kv", codebook_share_kv)
+                cfg.setdefault("codebook_position", codebook_position)
 
                 block_cfgs.append(cfg)
 
