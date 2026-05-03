@@ -1,0 +1,12 @@
+inherits:
+  - ./train_transformer_alibi_moe.yaml
+
+training:
+  nexus:
+    enabled: true
+    inner_lr: 1.0e-3
+    eps: 1.0e-12
+    normalize_scope: "global"
+    copy_buffers: true
+    log_inner_loss: true
+    log_pseudo_grad_norm: true

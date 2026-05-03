@@ -851,13 +851,18 @@ def main() -> None:
         feature_cols,
         numeric_groups=numeric_groups,
     )
+    trainer_cfg = dict(cfg.get("trainer", {}))
+    training_alias_cfg = dict(cfg.get("training", {}))
+    if training_alias_cfg:
+        trainer_cfg = _deep_merge_dict(trainer_cfg, training_alias_cfg)
+
     trainer = Trainer(
         model=model,
         objective=objective,
         optimizer=optimizer,
         scheduler=scheduler,
         feature_stats=feature_stats,
-        config=TrainerConfig(**dict(cfg.get("trainer", {}))),
+        config=TrainerConfig(**trainer_cfg),
         output_dir=run_output_dir,
     )
     # 3. 用 train-only continuous stats 生成 train/val 的 market_state columns
