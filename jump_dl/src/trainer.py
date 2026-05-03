@@ -11,6 +11,7 @@ import numpy as np
 from torch.nn.parameter import UninitializedBuffer, UninitializedParameter
 
 from .metrics import CosineSimilarityMetric
+from .optim.nexus import NexusConfig, NexusEngine
 from .utils.externals import ensure_torch
 
 torch = ensure_torch()
@@ -67,6 +68,9 @@ class TrainerConfig:
     # AMP / autocast
     use_amp: bool = False
     amp_dtype: str = "bfloat16"
+    grad_accum_steps: int = 1
+    use_nexus: bool = False
+    nexus: NexusConfig | dict[str, Any] = field(default_factory=NexusConfig)
 
     # Printed if present in metrics.
     # Full history.json still stores every metric.
@@ -93,6 +97,14 @@ class TrainerConfig:
                 "trainer.panel_virtual_batch must be a mapping or PanelVirtualBatchConfig, "
                 f"got {type(self.panel_virtual_batch)!r}"
             )
+
+        if isinstance(self.nexus, dict):
+            self.nexus = NexusConfig(**self.nexus)
+        elif not isinstance(self.nexus, NexusConfig):
+            raise TypeError(f"trainer.nexus must be a mapping or NexusConfig, got {type(self.nexus)!r}")
+
+        if self.grad_accum_steps < 1:
+            raise ValueError("trainer.grad_accum_steps must be >= 1")
 
 
 class Trainer:
@@ -125,6 +137,7 @@ class Trainer:
         self._epoch_table_keys: list[str] = []
         self.global_step = 0
         self.ema_num_updates = 0
+        self.nexus_engine: NexusEngine | None = None
 
         # EMA 不再维护 deepcopy 出来的 ema_model。
         # 只维护 detached cloned state_dict，避免 LazyModule / non-leaf Tensor deepcopy 报错。
@@ -541,6 +554,11 @@ class Trainer:
 
         run_model = self.model
         run_model.train(train)
+        nexus_enabled = bool(train and (self.config.use_nexus or self.config.nexus.enabled))
+        if nexus_enabled:
+            if hasattr(self.model, "module"):
+                raise NotImplementedError("Nexus with DDP is not implemented yet")
+            self.nexus_engine = None
 
         try:
             progress = self._iter_with_progress(dataloader, train=train, epoch=epoch)
@@ -574,12 +592,47 @@ class Trainer:
                         step_batch = dict(batch)
                         step_batch["loss_mask"] = loss_mask
 
-                    outputs, step_out, fwd_t, bwd_t, step_t = self._run_one_step(
-                        batch=step_batch,
-                        run_model=run_model,
-                        train=train,
-                        epoch=epoch,
-                    )
+                    if not nexus_enabled:
+                        outputs, step_out, fwd_t, bwd_t, step_t = self._run_one_step(
+                            batch=step_batch,
+                            run_model=run_model,
+                            train=train,
+                            epoch=epoch,
+                        )
+                    else:
+                        if self.nexus_engine is None:
+                            # Initialize lazy parameters/buffers on the main model first,
+                            # so NexusEngine can safely validate/sync lazy modules.
+                            with torch.no_grad():
+                                _ = run_model(step_batch)
+                            self.nexus_engine = NexusEngine(
+                                model=self.model,
+                                inner_lr=self.config.nexus.inner_lr,
+                                eps=self.config.nexus.eps,
+                                normalize_scope=self.config.nexus.normalize_scope,
+                                copy_buffers=self.config.nexus.copy_buffers,
+                            )
+                            self.nexus_engine.sync_inner_from_main()
+
+                        self._set_objective_progress(train=train, epoch=epoch)
+                        amp_dtype = self._get_amp_dtype()
+                        amp_enabled = self._amp_enabled()
+                        forward_start = time.perf_counter()
+                        with torch.autocast(
+                            device_type=self.device.type,
+                            dtype=amp_dtype if amp_dtype is not None else torch.float32,
+                            enabled=amp_enabled,
+                        ):
+                            outputs = self.nexus_engine.inner_model(step_batch)
+                            step_out = self.objective(outputs, step_batch)
+                            loss = step_out.loss
+                        fwd_t = time.perf_counter() - forward_start
+                        backward_start = time.perf_counter()
+                        loss.backward()
+                        self.nexus_engine.inner_step()
+                        self.nexus_engine.zero_inner_grad()
+                        bwd_t = time.perf_counter() - backward_start
+                        step_t = 0.0
 
                     total_forward_time += fwd_t
                     total_backward_time += bwd_t
@@ -595,6 +648,32 @@ class Trainer:
 
                     total_loss += float(step_out.loss.detach().item())
                     total_steps += 1
+
+                    if nexus_enabled and self.config.nexus.log_inner_loss:
+                        metric_sums["nexus_inner_loss"] = metric_sums.get("nexus_inner_loss", 0.0) + float(
+                            step_out.loss.detach().item()
+                        )
+
+                    if nexus_enabled and (total_steps % self.config.grad_accum_steps == 0):
+                        step_start = time.perf_counter()
+                        self.optimizer.zero_grad(set_to_none=True)
+                        pseudo_stats = self.nexus_engine.assign_pseudo_grad_to_main()
+                        if self.config.nexus.log_pseudo_grad_norm:
+                            metric_sums["nexus_pseudo_grad_norm"] = metric_sums.get("nexus_pseudo_grad_norm", 0.0) + float(
+                                pseudo_stats["pseudo_grad_norm"]
+                            )
+                            metric_sums["nexus_inner_delta_norm"] = metric_sums.get("nexus_inner_delta_norm", 0.0) + float(
+                                pseudo_stats["inner_delta_norm"]
+                            )
+                        metric_sums["nexus_inner_lr"] = metric_sums.get("nexus_inner_lr", 0.0) + float(self.config.nexus.inner_lr)
+                        if self.config.grad_clip_norm is not None:
+                            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.grad_clip_norm)
+                        self.optimizer.step()
+                        self.optimizer.zero_grad(set_to_none=True)
+                        self.global_step += 1
+                        self._update_ema()
+                        self.nexus_engine.sync_inner_from_main()
+                        total_step_time += time.perf_counter() - step_start
 
                     for name, value in step_out.metrics.items():
                         metric_sums[name] = metric_sums.get(name, 0.0) + float(value)
@@ -616,6 +695,27 @@ class Trainer:
                             postfix["mog"] = f"{metric_sums['mog_nll'] / max(total_steps, 1):.4f}"
 
                         progress.set_postfix(**postfix, refresh=False)
+
+            if nexus_enabled and (total_steps % self.config.grad_accum_steps != 0):
+                step_start = time.perf_counter()
+                self.optimizer.zero_grad(set_to_none=True)
+                pseudo_stats = self.nexus_engine.assign_pseudo_grad_to_main()
+                if self.config.nexus.log_pseudo_grad_norm:
+                    metric_sums["nexus_pseudo_grad_norm"] = metric_sums.get("nexus_pseudo_grad_norm", 0.0) + float(
+                        pseudo_stats["pseudo_grad_norm"]
+                    )
+                    metric_sums["nexus_inner_delta_norm"] = metric_sums.get("nexus_inner_delta_norm", 0.0) + float(
+                        pseudo_stats["inner_delta_norm"]
+                    )
+                metric_sums["nexus_inner_lr"] = metric_sums.get("nexus_inner_lr", 0.0) + float(self.config.nexus.inner_lr)
+                if self.config.grad_clip_norm is not None:
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.grad_clip_norm)
+                self.optimizer.step()
+                self.optimizer.zero_grad(set_to_none=True)
+                self.global_step += 1
+                self._update_ema()
+                self.nexus_engine.sync_inner_from_main()
+                total_step_time += time.perf_counter() - step_start
 
             if train and self.scheduler is not None:
                 self.scheduler.step()
