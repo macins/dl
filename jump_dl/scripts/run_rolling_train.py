@@ -236,6 +236,20 @@ def _build_objective(
     if inferred_target_index is None and target_key in target_cols:
         inferred_target_index = target_cols.index(target_key)
     stats = target_stats.get(target_key, {"mean": 0.0, "std": 1.0})
+    target_inc_means = objective_cfg.get("target_inc_means")
+    target_inc_stds = objective_cfg.get("target_inc_stds")
+    inc_keys_cfg = objective_cfg.get("target_inc_keys")
+    if inc_keys_cfg and target_inc_means is None and target_inc_stds is None:
+        inc_keys = [str(v) for v in inc_keys_cfg]
+        target_inc_means = [
+            float(target_stats.get(k, {}).get("mean", 0.0))
+            for k in inc_keys
+        ]
+        target_inc_stds = [
+            float(target_stats.get(k, {}).get("std", 1.0) or 1.0)
+            for k in inc_keys
+        ]
+
     return CosineSimilarityObjective(
         lam_cos=float(objective_cfg.get("lam_cos", 1.0)),
         lam_mse=float(objective_cfg.get("lam_mse", 1.0)),
@@ -245,6 +259,18 @@ def _build_objective(
         target_std=float(stats.get("std", 1.0)),
         pred_index=objective_cfg.get("pred_index"),
         target_index=inferred_target_index,
+        path_key=str(objective_cfg.get("path_key", "path")),
+        pred_inc_key=str(objective_cfg.get("pred_inc_key", "pred_inc")),
+        pred_cum_key=str(objective_cfg.get("pred_cum_key", "pred_cum")),
+        target_inc_key=objective_cfg.get("target_inc_key"),
+        target_inc_keys=objective_cfg.get("target_inc_keys"),
+        target_inc_means=target_inc_means,
+        target_inc_stds=target_inc_stds,
+        target_cum_key=objective_cfg.get("target_cum_key"),
+        aux_cum_huber_weight=float(objective_cfg.get("aux_cum_huber_weight", 0.0)),
+        aux_inc_huber_weight=float(objective_cfg.get("aux_inc_huber_weight", 0.0)),
+        aux_huber_delta=float(objective_cfg.get("aux_huber_delta", 1.0)),
+        aux_horizon_weights=objective_cfg.get("aux_horizon_weights"),
     )
 
 

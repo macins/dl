@@ -121,6 +121,18 @@ class CosineSimilarityObjective(nn.Module):
         use_sample_weight: bool = False,
         weight_key: str = "weight",
         eps: float = 1e-12,
+        path_key: str = "path",
+        pred_inc_key: str = "pred_inc",
+        pred_cum_key: str = "pred_cum",
+        target_inc_key: str | None = None,
+        target_inc_keys: list[str] | tuple[str, ...] | None = None,
+        target_inc_means: list[float] | tuple[float, ...] | None = None,
+        target_inc_stds: list[float] | tuple[float, ...] | None = None,
+        target_cum_key: str | None = None,
+        aux_cum_huber_weight: float = 0.0,
+        aux_inc_huber_weight: float = 0.0,
+        aux_huber_delta: float = 1.0,
+        aux_horizon_weights: list[float] | tuple[float, ...] | None = None,
     ) -> None:
         super().__init__()
 
@@ -140,6 +152,18 @@ class CosineSimilarityObjective(nn.Module):
         self.use_sample_weight = bool(use_sample_weight)
         self.weight_key = str(weight_key)
         self.eps = float(eps)
+        self.path_key = str(path_key)
+        self.pred_inc_key = str(pred_inc_key)
+        self.pred_cum_key = str(pred_cum_key)
+        self.target_inc_key = None if target_inc_key is None else str(target_inc_key)
+        self.target_inc_keys = None if target_inc_keys is None else [str(v) for v in target_inc_keys]
+        self.target_inc_means = None if target_inc_means is None else [float(v) for v in target_inc_means]
+        self.target_inc_stds = None if target_inc_stds is None else [float(v) if float(v) != 0.0 else 1.0 for v in target_inc_stds]
+        self.target_cum_key = None if target_cum_key is None else str(target_cum_key)
+        self.aux_cum_huber_weight = float(aux_cum_huber_weight)
+        self.aux_inc_huber_weight = float(aux_inc_huber_weight)
+        self.aux_huber_delta = float(aux_huber_delta)
+        self.aux_horizon_weights = None if aux_horizon_weights is None else [float(v) for v in aux_horizon_weights]
 
         self.loss_weights: dict[str, float] = {
             "cos": float(lam_cos),
@@ -464,6 +488,37 @@ class CosineSimilarityObjective(nn.Module):
 
         return total, metrics
 
+    def _get_path_pred_tensor(self, outputs: dict, *, name: str) -> torch.Tensor | None:
+        container = outputs.get(self.path_key)
+        if not isinstance(container, Mapping):
+            return None
+        value = container.get(name)
+        if value is None:
+            return None
+        if not torch.is_tensor(value):
+            raise TypeError(f"outputs[{self.path_key!r}][{name!r}] must be tensor, got {type(value)!r}")
+        return value
+
+    def _get_target_by_key(self, batch: dict, key: str) -> torch.Tensor:
+        targets = batch["targets"]
+        if isinstance(targets, Mapping):
+            value = targets.get(key)
+            if value is None:
+                raise KeyError(f"targets missing key {key!r}. Available: {sorted(targets.keys())}")
+            if not torch.is_tensor(value):
+                raise TypeError(f"targets[{key!r}] must be tensor, got {type(value)!r}")
+            return value
+        if torch.is_tensor(targets):
+            cols = batch.get("target_col_names")
+            if isinstance(cols, (list, tuple)) and key in cols:
+                idx = int(list(cols).index(key))
+                return targets[..., idx]
+            raise TypeError(
+                "Path auxiliary targets require mapping targets, or tensor targets with "
+                "batch['target_col_names'] containing the requested key."
+            )
+        raise TypeError(f"Unsupported targets container: {type(targets)!r}")
+
     # ------------------------------------------------------------------
     # MoG utilities
     # ------------------------------------------------------------------
@@ -744,6 +799,90 @@ class CosineSimilarityObjective(nn.Module):
         )
 
         aux_loss_total, aux_metrics = self.get_aux_losses(outputs)
+        path_aux_metrics: dict[str, float] = {}
+
+        pred_inc = self._get_path_pred_tensor(outputs, name=self.pred_inc_key)
+        pred_cum = self._get_path_pred_tensor(outputs, name=self.pred_cum_key)
+        if pred_inc is not None and pred_cum is None:
+            pred_cum = torch.cumsum(pred_inc, dim=-1)
+
+        if pred_cum is not None and self.target_cum_key is not None:
+            target_cum = self._get_target_by_key(batch, self.target_cum_key).float()
+            if target_cum.shape != pred_cum.shape:
+                raise ValueError(
+                    f"Cumulative target shape mismatch: pred={tuple(pred_cum.shape)}, "
+                    f"target={tuple(target_cum.shape)}."
+                )
+            mask_h = valid.unsqueeze(-1).expand_as(pred_cum)
+            w_h = w.unsqueeze(-1).expand_as(pred_cum)
+            huber = F.huber_loss(pred_cum.float(), target_cum, delta=self.aux_huber_delta, reduction="none")
+            if self.aux_horizon_weights is not None:
+                horizon_w = torch.as_tensor(
+                    self.aux_horizon_weights,
+                    device=huber.device,
+                    dtype=huber.dtype,
+                )
+                if horizon_w.numel() != huber.shape[-1]:
+                    raise ValueError(
+                        f"aux_horizon_weights length={horizon_w.numel()} "
+                        f"does not match horizon dim={huber.shape[-1]}."
+                    )
+                huber = huber * horizon_w.view(*([1] * (huber.ndim - 1)), -1)
+            huber = torch.where(mask_h, huber, torch.zeros_like(huber))
+            denom = torch.sum(w_h).clamp_min(self.eps)
+            aux_cum_huber = torch.sum(huber * w_h) / denom
+            aux_loss_total = aux_loss_total + self.aux_cum_huber_weight * aux_cum_huber
+            path_aux_metrics["aux_cum_huber"] = float(aux_cum_huber.detach().item())
+
+        if pred_inc is not None and self.target_inc_key is not None:
+            target_inc = self._get_target_by_key(batch, self.target_inc_key).float()
+            if target_inc.shape != pred_inc.shape:
+                raise ValueError(
+                    f"Increment target shape mismatch: pred={tuple(pred_inc.shape)}, "
+                    f"target={tuple(target_inc.shape)}."
+                )
+            mask_h = valid.unsqueeze(-1).expand_as(pred_inc)
+            w_h = w.unsqueeze(-1).expand_as(pred_inc)
+            pred_inc_for_loss = pred_inc.float()
+            target_inc_for_loss = target_inc
+            inc_huber = F.huber_loss(pred_inc_for_loss, target_inc_for_loss, delta=self.aux_huber_delta, reduction="none")
+            inc_huber = torch.where(mask_h, inc_huber, torch.zeros_like(inc_huber))
+            denom = torch.sum(w_h).clamp_min(self.eps)
+            aux_inc_huber = torch.sum(inc_huber * w_h) / denom
+            aux_loss_total = aux_loss_total + self.aux_inc_huber_weight * aux_inc_huber
+            path_aux_metrics["aux_inc_huber"] = float(aux_inc_huber.detach().item())
+        elif pred_inc is not None and self.target_inc_keys:
+            parts = [self._get_target_by_key(batch, key).float() for key in self.target_inc_keys]
+            target_inc = torch.stack(parts, dim=-1)
+            if target_inc.shape != pred_inc.shape:
+                raise ValueError(
+                    f"Increment target shape mismatch: pred={tuple(pred_inc.shape)}, "
+                    f"target={tuple(target_inc.shape)}."
+                )
+            mask_h = valid.unsqueeze(-1).expand_as(pred_inc)
+            w_h = w.unsqueeze(-1).expand_as(pred_inc)
+            pred_inc_for_loss = pred_inc.float()
+            target_inc_for_loss = target_inc
+            if self.target_inc_means is not None and self.target_inc_stds is not None:
+                means = torch.as_tensor(self.target_inc_means, device=pred_inc.device, dtype=pred_inc_for_loss.dtype)
+                stds = torch.as_tensor(self.target_inc_stds, device=pred_inc.device, dtype=pred_inc_for_loss.dtype).clamp_min(self.eps)
+                if means.numel() != pred_inc.shape[-1] or stds.numel() != pred_inc.shape[-1]:
+                    raise ValueError(
+                        "target_inc_means/target_inc_stds length mismatch with increment horizon dim: "
+                        f"means={means.numel()}, stds={stds.numel()}, horizon={pred_inc.shape[-1]}"
+                    )
+                view_shape = (*([1] * (pred_inc.ndim - 1)), -1)
+                means = means.view(*view_shape)
+                stds = stds.view(*view_shape)
+                pred_inc_for_loss = (pred_inc_for_loss - means) / stds
+                target_inc_for_loss = (target_inc_for_loss - means) / stds
+
+            inc_huber = F.huber_loss(pred_inc_for_loss, target_inc_for_loss, delta=self.aux_huber_delta, reduction="none")
+            inc_huber = torch.where(mask_h, inc_huber, torch.zeros_like(inc_huber))
+            denom = torch.sum(w_h).clamp_min(self.eps)
+            aux_inc_huber = torch.sum(inc_huber * w_h) / denom
+            aux_loss_total = aux_loss_total + self.aux_inc_huber_weight * aux_inc_huber
+            path_aux_metrics["aux_inc_huber"] = float(aux_inc_huber.detach().item())
 
         weights = self.get_current_loss_weights()
 
@@ -777,6 +916,7 @@ class CosineSimilarityObjective(nn.Module):
             **{f"loss_weight_{name}": float(value) for name, value in weights.items()},
             **mog_metrics,
             **aux_metrics,
+            **path_aux_metrics,
         }
 
         return ObjectiveOutput(loss=loss, metrics=metrics)
