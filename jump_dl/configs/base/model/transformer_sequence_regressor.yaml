@@ -3,7 +3,7 @@ model:
   encoder:
     name: tabular_sequence
     numeric_feature_groups: [continuous]
-    context_feature_groups: [market_state]
+    context_feature_groups: []
     include_raw_numeric: true
     categorical_cols: ["Symbol", "DATA_sector", "DATA_month"]
     categorical_embedding_dim: 8
@@ -21,31 +21,16 @@ model:
     qk_norm: true
     attention_gate: true
     max_seq_len: 4096
-    position_encoding: rope
+    position_encoding: alibi
     causal: true
     use_moe: false
     num_experts: 4
     expert_hidden_size: 256
     top_k: 2
     aux_loss_weight: 1.0e-2
-    router_z_loss_weight: 1.0e-3
+    router_z_loss_weight: 0
     shared_experts: 0
-    multi_resolution:
-      enabled: false
-      placement: none
-      scales: [5, 15, 30]
-      fusion: softmax_gate
-      conv_type: depthwise
-      dropout: 0.0
-      residual_scale: 1.0
-      insert_every_n_layers: 2
-      start_layer: 0
-      end_layer: null
-      patch_memory:
-        enabled: false
-        num_heads: 4
-        include_partial_patch: false
-        max_patches: null
+    
   head:
     name: sequence_regression
     target_key: ret_30min
