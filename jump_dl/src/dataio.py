@@ -197,6 +197,7 @@ class SliceBatchDataset(Dataset):
         out: dict[str, Any] = {
             "features": features,
             "targets": targets,
+            "target_col_names": list(self.target_cols),
             "lengths": lengths_t,
             "padding_mask": padding_mask,
         }
@@ -561,6 +562,7 @@ class MarketDayDataset(Dataset):
         out: dict[str, Any] = {
             "features": features,
             "targets": targets,
+            "target_col_names": list(self.target_cols),
 
             # 兼容 trainer/objective 里常用的 mask 名字。
             # 注意这里 padding_mask 是 3D: (B, N, T)
