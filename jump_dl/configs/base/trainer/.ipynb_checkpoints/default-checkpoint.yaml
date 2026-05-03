@@ -6,6 +6,7 @@ trainer:
   monitor_key: cosine_similarity
   monitor_mode: max
   grad_clip_norm: 10.0
+  enable_tensorboard: true
   ema:
     enabled: true
     decay: 0.998

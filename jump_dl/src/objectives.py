@@ -158,7 +158,9 @@ class CosineSimilarityObjective(nn.Module):
         self.target_inc_key = None if target_inc_key is None else str(target_inc_key)
         self.target_inc_keys = None if target_inc_keys is None else [str(v) for v in target_inc_keys]
         self.target_inc_means = None if target_inc_means is None else [float(v) for v in target_inc_means]
-        self.target_inc_stds = None if target_inc_stds is None else [float(v) if float(v) != 0.0 else 1.0 for v in target_inc_stds]
+        self.target_inc_stds = None if target_inc_stds is None else [
+            float(v) if float(v) != 0.0 else 1.0 for v in target_inc_stds
+        ]
         self.target_cum_key = None if target_cum_key is None else str(target_cum_key)
         self.aux_cum_huber_weight = float(aux_cum_huber_weight)
         self.aux_inc_huber_weight = float(aux_inc_huber_weight)
@@ -285,20 +287,11 @@ class CosineSimilarityObjective(nn.Module):
         if value.ndim == 0:
             raise ValueError(f"{kind} tensor must have at least one dimension.")
 
-        # Common scalar-per-token shapes:
-        #   old:   (B, T)
-        #   panel: (B, N, T)
-        #
-        # This also means that true multi-target tensors with shape (B, T, C)
-        # should pass index explicitly if ambiguity matters.
         if value.ndim <= 3:
             if index is None:
                 return value
             return value[..., int(index)]
 
-        # If last dim is singleton target dim:
-        #   (B, T, 1)
-        #   (B, N, T, 1)
         if value.shape[-1] == 1 and index is None:
             return value[..., 0]
 
@@ -536,7 +529,6 @@ class CosineSimilarityObjective(nn.Module):
         elif self.target_key in mog:
             container = mog[self.target_key]
         else:
-            # Allow flat outputs["mog"] = {"mix_logits": ..., "raw_scales": ...}
             container = mog
 
         if not isinstance(container, Mapping):
@@ -645,7 +637,6 @@ class CosineSimilarityObjective(nn.Module):
         )
 
         if raw_scales is None:
-            # Also support old naming if you later choose to output log_scales.
             raw_scales = self._get_mog_tensor(
                 container,
                 "log_scales",
@@ -845,12 +836,18 @@ class CosineSimilarityObjective(nn.Module):
             w_h = w.unsqueeze(-1).expand_as(pred_inc)
             pred_inc_for_loss = pred_inc.float()
             target_inc_for_loss = target_inc
-            inc_huber = F.huber_loss(pred_inc_for_loss, target_inc_for_loss, delta=self.aux_huber_delta, reduction="none")
+            inc_huber = F.huber_loss(
+                pred_inc_for_loss,
+                target_inc_for_loss,
+                delta=self.aux_huber_delta,
+                reduction="none",
+            )
             inc_huber = torch.where(mask_h, inc_huber, torch.zeros_like(inc_huber))
             denom = torch.sum(w_h).clamp_min(self.eps)
             aux_inc_huber = torch.sum(inc_huber * w_h) / denom
             aux_loss_total = aux_loss_total + self.aux_inc_huber_weight * aux_inc_huber
             path_aux_metrics["aux_inc_huber"] = float(aux_inc_huber.detach().item())
+
         elif pred_inc is not None and self.target_inc_keys:
             parts = [self._get_target_by_key(batch, key).float() for key in self.target_inc_keys]
             target_inc = torch.stack(parts, dim=-1)
@@ -863,9 +860,18 @@ class CosineSimilarityObjective(nn.Module):
             w_h = w.unsqueeze(-1).expand_as(pred_inc)
             pred_inc_for_loss = pred_inc.float()
             target_inc_for_loss = target_inc
+
             if self.target_inc_means is not None and self.target_inc_stds is not None:
-                means = torch.as_tensor(self.target_inc_means, device=pred_inc.device, dtype=pred_inc_for_loss.dtype)
-                stds = torch.as_tensor(self.target_inc_stds, device=pred_inc.device, dtype=pred_inc_for_loss.dtype).clamp_min(self.eps)
+                means = torch.as_tensor(
+                    self.target_inc_means,
+                    device=pred_inc.device,
+                    dtype=pred_inc_for_loss.dtype,
+                )
+                stds = torch.as_tensor(
+                    self.target_inc_stds,
+                    device=pred_inc.device,
+                    dtype=pred_inc_for_loss.dtype,
+                ).clamp_min(self.eps)
                 if means.numel() != pred_inc.shape[-1] or stds.numel() != pred_inc.shape[-1]:
                     raise ValueError(
                         "target_inc_means/target_inc_stds length mismatch with increment horizon dim: "
@@ -877,7 +883,12 @@ class CosineSimilarityObjective(nn.Module):
                 pred_inc_for_loss = (pred_inc_for_loss - means) / stds
                 target_inc_for_loss = (target_inc_for_loss - means) / stds
 
-            inc_huber = F.huber_loss(pred_inc_for_loss, target_inc_for_loss, delta=self.aux_huber_delta, reduction="none")
+            inc_huber = F.huber_loss(
+                pred_inc_for_loss,
+                target_inc_for_loss,
+                delta=self.aux_huber_delta,
+                reduction="none",
+            )
             inc_huber = torch.where(mask_h, inc_huber, torch.zeros_like(inc_huber))
             denom = torch.sum(w_h).clamp_min(self.eps)
             aux_inc_huber = torch.sum(inc_huber * w_h) / denom
@@ -920,6 +931,7 @@ class CosineSimilarityObjective(nn.Module):
         }
 
         return ObjectiveOutput(loss=loss, metrics=metrics)
+
     def __repr__(self) -> str:
         def fmt_float(x: float | None) -> str:
             if x is None:
@@ -930,24 +942,29 @@ class CosineSimilarityObjective(nn.Module):
             if abs(x) < 1e-3 or abs(x) >= 1e4:
                 return f"{x:.3e}"
             return f"{x:.6g}"
-    
+
+        def fmt_sequence(xs: list[Any] | tuple[Any, ...] | None) -> str:
+            if xs is None:
+                return "None"
+            return "[" + ", ".join(fmt_float(x) if isinstance(x, float) else repr(x) for x in xs) + "]"
+
         def fmt_mapping(m: Mapping[str, Any]) -> str:
             if not m:
                 return "{}"
-    
+
             parts = []
             for k, v in m.items():
                 if isinstance(v, float):
                     parts.append(f"{k}={fmt_float(v)}")
                 else:
                     parts.append(f"{k}={v!r}")
-    
+
             return "{" + ", ".join(parts) + "}"
-    
+
         def fmt_schedule(name: str, cfg: Mapping[str, Any]) -> str:
             by = cfg.get("by", cfg.get("schedule_by", "step"))
             mode = cfg.get("mode", cfg.get("type", "linear"))
-    
+
             if str(by).lower() in {"step", "global_step", "steps"}:
                 start = cfg.get("start", cfg.get("start_step", 0))
                 end = cfg.get("end", cfg.get("end_step", start))
@@ -956,19 +973,19 @@ class CosineSimilarityObjective(nn.Module):
                 start = cfg.get("start", cfg.get("start_epoch", 1))
                 end = cfg.get("end", cfg.get("end_epoch", self.num_epochs))
                 unit = "epoch"
-    
+
             base = self.loss_weights.get(name, 0.0)
             start_weight = cfg.get("start_weight", base)
             end_weight = cfg.get("end_weight", base)
-    
+
             return (
                 f"{name}: {mode}, by={unit}, "
                 f"{start}->{end}, "
                 f"{fmt_float(start_weight)}->{fmt_float(end_weight)}"
             )
-    
+
         current_weights = self.get_current_loss_weights()
-    
+
         lines = [
             f"{self.__class__.__name__}(",
             f"  pred_key={self.pred_key!r}, target_key={self.target_key!r},",
@@ -988,94 +1005,25 @@ class CosineSimilarityObjective(nn.Module):
                 f"(enabled={self.use_sample_weight}, weight_key={self.weight_key!r}),"
             ),
             (
-                "  progress="
-                f"(global_step={self.global_step}, "
-                f"epoch={self.current_epoch}/{self.num_epochs}, "
-                f"train={self.training_context}),"
-            ),
-            f"  loss_weights={fmt_mapping(self.loss_weights)},",
-            f"  current_loss_weights={fmt_mapping(current_weights)},",
-        ]
-    
-        if self.loss_schedules:
-            lines.append("  loss_schedules=[")
-            for name, cfg in self.loss_schedules.items():
-                lines.append(f"    {fmt_schedule(name, cfg)},")
-            lines.append("  ],")
-        else:
-            lines.append("  loss_schedules=[],")
-    
-        lines.append(f"  eps={fmt_float(self.eps)}")
-        lines.append(")")
-    
-        return "\n".join(lines)
-        
-    def __repr__(self) -> str:
-        def fmt_float(x: float | None) -> str:
-            if x is None:
-                return "None"
-            x = float(x)
-            if x == 0.0:
-                return "0.0"
-            if abs(x) < 1e-3 or abs(x) >= 1e4:
-                return f"{x:.3e}"
-            return f"{x:.6g}"
-    
-        def fmt_mapping(m: Mapping[str, Any]) -> str:
-            if not m:
-                return "{}"
-    
-            parts = []
-            for k, v in m.items():
-                if isinstance(v, float):
-                    parts.append(f"{k}={fmt_float(v)}")
-                else:
-                    parts.append(f"{k}={v!r}")
-    
-            return "{" + ", ".join(parts) + "}"
-    
-        def fmt_schedule(name: str, cfg: Mapping[str, Any]) -> str:
-            by = cfg.get("by", cfg.get("schedule_by", "step"))
-            mode = cfg.get("mode", cfg.get("type", "linear"))
-    
-            if str(by).lower() in {"step", "global_step", "steps"}:
-                start = cfg.get("start", cfg.get("start_step", 0))
-                end = cfg.get("end", cfg.get("end_step", start))
-                unit = "step"
-            else:
-                start = cfg.get("start", cfg.get("start_epoch", 1))
-                end = cfg.get("end", cfg.get("end_epoch", self.num_epochs))
-                unit = "epoch"
-    
-            base = self.loss_weights.get(name, 0.0)
-            start_weight = cfg.get("start_weight", base)
-            end_weight = cfg.get("end_weight", base)
-    
-            return (
-                f"{name}: {mode}, by={unit}, "
-                f"{start}->{end}, "
-                f"{fmt_float(start_weight)}->{fmt_float(end_weight)}"
-            )
-    
-        current_weights = self.get_current_loss_weights()
-    
-        lines = [
-            f"{self.__class__.__name__}(",
-            f"  pred_key={self.pred_key!r}, target_key={self.target_key!r},",
-            f"  pred_index={self.pred_index!r}, target_index={self.target_index!r},",
-            (
-                "  target_normalization="
-                f"(mean={fmt_float(self.target_mean)}, std={fmt_float(self.target_std)}),"
+                "  path_aux="
+                f"(path_key={self.path_key!r}, "
+                f"pred_inc_key={self.pred_inc_key!r}, "
+                f"pred_cum_key={self.pred_cum_key!r}, "
+                f"target_inc_key={self.target_inc_key!r}, "
+                f"target_inc_keys={self.target_inc_keys!r}, "
+                f"target_cum_key={self.target_cum_key!r}),"
             ),
             (
-                "  mog="
-                f"(key={self.mog_key!r}, "
-                f"sigma_floor={fmt_float(self.sigma_floor)}, "
-                f"sigma_max={fmt_float(self.sigma_max)}),"
+                "  path_aux_normalization="
+                f"(target_inc_means={fmt_sequence(self.target_inc_means)}, "
+                f"target_inc_stds={fmt_sequence(self.target_inc_stds)}),"
             ),
             (
-                "  sample_weight="
-                f"(enabled={self.use_sample_weight}, weight_key={self.weight_key!r}),"
+                "  path_aux_loss="
+                f"(aux_cum_huber_weight={fmt_float(self.aux_cum_huber_weight)}, "
+                f"aux_inc_huber_weight={fmt_float(self.aux_inc_huber_weight)}, "
+                f"aux_huber_delta={fmt_float(self.aux_huber_delta)}, "
+                f"aux_horizon_weights={fmt_sequence(self.aux_horizon_weights)}),"
             ),
             (
                 "  progress="
@@ -1086,7 +1034,7 @@ class CosineSimilarityObjective(nn.Module):
             f"  loss_weights={fmt_mapping(self.loss_weights)},",
             f"  current_loss_weights={fmt_mapping(current_weights)},",
         ]
-    
+
         if self.loss_schedules:
             lines.append("  loss_schedules=[")
             for name, cfg in self.loss_schedules.items():
@@ -1094,11 +1042,13 @@ class CosineSimilarityObjective(nn.Module):
             lines.append("  ],")
         else:
             lines.append("  loss_schedules=[],")
-    
+
         lines.append(f"  eps={fmt_float(self.eps)}")
         lines.append(")")
-    
+
         return "\n".join(lines)
+
+
 class MoGRegressionObjective(CosineSimilarityObjective):
     """
     Convenience alias/class.

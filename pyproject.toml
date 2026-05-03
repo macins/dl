@@ -32,6 +32,7 @@ dependencies = [
     "scikit-learn>=1.8.0",
     "scipy>=1.17.1",
     "seaborn>=0.13.2",
+    "tensorboard>=2.20.0",
     "tokenizers>=0.22.2",
     "torch>=2.11.0",
     "torchvision>=0.26.0",

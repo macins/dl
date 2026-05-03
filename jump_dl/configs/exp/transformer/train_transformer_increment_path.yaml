@@ -8,6 +8,10 @@ inherits:
   - ../../base/scheduler/cosine_60.yaml
   - ../../base/trainer/default.yaml
 
+data:
+  train_dataloader:
+    shuffle: false
+
 output_dir: workdirs/jump_dl/transformer_increment_path
 
 model:
@@ -17,7 +21,7 @@ model:
   head:
     name: increment_path
     target_key: ret_30min
-    num_horizons: 6
+    num_horizons: 4
     path_key: path
     use_layer_norm: true
 
@@ -40,7 +44,7 @@ model:
         gru_hidden_size: 384
         gru_num_layers: 1
         output_zero_init: true
-
+        
       - type: moe_ffn
         ffn_hidden_size: 384
     use_register_tokens: true
@@ -54,15 +58,13 @@ objective:
   target_key: ret_30min
   target_inc_keys:
     - ret_5min
-    - ret_5_10min
-    - ret_10_15min
-    - ret_15_20min
-    - ret_20_25min
+    - ret_10min
+    - ret_25min
     - ret_25_30min
   aux_cum_huber_weight: 0.0
-  aux_inc_huber_weight: 0.01
-  aux_huber_delta: 1.0
-  aux_horizon_weights: [0.4, 0.6, 0.8, 1.0, 1.1, 1.2]
+  aux_inc_huber_weight: 0.0
+  aux_huber_delta: 0.5
+  aux_horizon_weights: [0.8, 1.0, 1.2, 1.4]
 
   loss_weights:
     cos: 1.0
@@ -75,10 +77,8 @@ objective:
 data:
   dataset:
     target_cols:
-      - ret_30min
       - ret_5min
-      - ret_5_10min
-      - ret_10_15min
-      - ret_15_20min
-      - ret_20_25min
+      - ret_10min
+      - ret_30min
+      - ret_25min
       - ret_25_30min
