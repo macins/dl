@@ -59,3 +59,21 @@ model:
   aux_loss_weight: 1.0e-2
   router_z_loss_weight: 0
   shared_experts: 0
+
+  symbol_query_decoder:
+    enabled: false
+    mode: full_causal
+    num_heads: 4
+    dropout: 0.0
+    residual_init: 0.0
+    use_symbol_embedding: true
+    num_symbols: null
+    use_layer_norm: true
+    exclude_self: false
+    add_lag_bias: false
+    max_lag: null
+    topk_indices_path: null
+    topk_indices: null
+    topk_k: null
+    memory_pooling: mean
+    cross_gate: true

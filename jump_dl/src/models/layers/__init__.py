@@ -1,6 +1,7 @@
 from .recurrent import ResidualGRUBlock
 from .codebook import CodebookAdapter
 from .transformer import TransformerEncoderBlock
+from .symbol_query_decoder import SymbolQueryDecoder
 from .multiresolution import (
     CausalConv1dTime,
     MultiScaleCausalConv,
@@ -21,6 +22,7 @@ __all__ = [
     "MultiResolutionSublayer",
     "CausalPatchMemoryCrossAttention",
     "RouterConditionedMultiScale",
+    "SymbolQueryDecoder",
     "build_block",
     "get_block",
     "register_block",
