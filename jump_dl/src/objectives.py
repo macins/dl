@@ -133,6 +133,7 @@ class CosineSimilarityObjective(nn.Module):
         aux_inc_huber_weight: float = 0.0,
         aux_huber_delta: float = 1.0,
         aux_horizon_weights: list[float] | tuple[float, ...] | None = None,
+        multi_horizon: Mapping[str, Any] | None = None,
     ) -> None:
         super().__init__()
 
@@ -189,6 +190,18 @@ class CosineSimilarityObjective(nn.Module):
         self.current_epoch = 0
         self.num_epochs = 1
         self.training_context = True
+        mh_cfg = dict(multi_horizon or {})
+        self.multi_horizon_enabled = bool(mh_cfg.get("enabled", False))
+        self.multi_horizon_horizons = [int(h) for h in mh_cfg.get("horizons", [30])]
+        self.multi_horizon_main = int(mh_cfg.get("main_horizon", 30))
+        self.multi_horizon_label_keys = {int(k): str(v) for k, v in dict(mh_cfg.get("label_keys", {})).items()}
+        mh_loss = dict(mh_cfg.get("loss", {}))
+        self.multi_horizon_loss_type = str(mh_loss.get("type", "global_cosine")).lower()
+        self.multi_horizon_main_weight = float(mh_loss.get("main_weight", 1.0))
+        self.multi_horizon_aux_weights = {int(k): float(v) for k, v in dict(mh_loss.get("aux_weights", {})).items()}
+        self.multi_horizon_label_std = {int(k): v for k, v in dict(mh_cfg.get("label_std", {})).items()}
+        self.multi_horizon_norm_per_h = bool(mh_cfg.get("normalize_per_horizon", False))
+        self.multi_horizon_aux_schedule = dict(mh_loss.get("aux_schedule", {}))
 
     # ------------------------------------------------------------------
     # Trainer hook for scheduled loss weights
@@ -743,11 +756,65 @@ class CosineSimilarityObjective(nn.Module):
 
         return terms, metrics
 
+
+    def _extract_horizon_labels(self, batch: dict) -> dict[int, torch.Tensor]:
+        targets = batch.get("targets")
+        out: dict[int, torch.Tensor] = {}
+        for hz in self.multi_horizon_horizons:
+            key = self.multi_horizon_label_keys.get(hz)
+            if key is None:
+                raise KeyError(f"Missing label key config for horizon={hz}. Please set objective.multi_horizon.label_keys[{hz}].")
+
+            if isinstance(targets, Mapping):
+                if key not in targets:
+                    raise KeyError(f"Missing label for horizon={hz}. Expected key={key!r} in batch['targets'] mapping.")
+                y = targets[key]
+            elif torch.is_tensor(targets):
+                cols = batch.get("target_col_names")
+                if not isinstance(cols, (list, tuple)) or key not in cols:
+                    raise KeyError(
+                        f"Missing label for horizon={hz}. targets is tensor, but key={key!r} not found in batch['target_col_names']={cols!r}."
+                    )
+                idx = int(list(cols).index(key))
+                y = targets[..., idx]
+            else:
+                raise TypeError(
+                    "multi_horizon.enabled=true requires batch['targets'] to be either a mapping, "
+                    "or a tensor with batch['target_col_names']."
+                )
+
+            if not torch.is_tensor(y):
+                raise TypeError(f"Horizon label {key!r} must be tensor, got {type(y)!r}.")
+            if y.ndim > 3 and y.shape[-1] == 1:
+                y = y[..., 0]
+            if self.multi_horizon_norm_per_h and self.multi_horizon_label_std.get(hz) not in (None, 0):
+                y = y / float(self.multi_horizon_label_std[hz])
+            out[hz] = y
+        return out
+
+    def _aux_multiplier(self) -> float:
+        cfg = self.multi_horizon_aux_schedule
+        if not bool(cfg.get("enabled", False)):
+            return 1.0
+        start = float(cfg.get("start_weight_multiplier", 1.0))
+        final = float(cfg.get("final_weight_multiplier", 1.0))
+        s0 = int(cfg.get("start_step", 0))
+        s1 = cfg.get("end_step", None)
+        if s1 is None:
+            return 1.0
+        s1 = int(s1)
+        if s1 <= s0:
+            return final
+        t = max(0.0, min(1.0, (self.global_step - s0) / float(s1 - s0)))
+        return final + 0.5 * (start - final) * (1.0 + math.cos(math.pi * t))
     # ------------------------------------------------------------------
     # Forward
     # ------------------------------------------------------------------
 
     def forward(self, outputs: dict, batch: dict) -> ObjectiveOutput:
+        if self.multi_horizon_enabled and "pred_by_horizon" in outputs:
+            return self._forward_multi_horizon(outputs, batch)
+
         y_pred = self.get_prediction_tensor(outputs)
         y_true = self.get_target_tensor(batch)
         mask = self.get_mask_tensor(batch)
@@ -931,6 +998,39 @@ class CosineSimilarityObjective(nn.Module):
         }
 
         return ObjectiveOutput(loss=loss, metrics=metrics)
+
+    def _forward_multi_horizon(self, outputs: dict, batch: dict) -> ObjectiveOutput:
+        pred_by_h = outputs["pred_by_horizon"]
+        y_by_h = self._extract_horizon_labels(batch)
+        mask = self.get_mask_tensor(batch).bool()
+        total = torch.tensor(0.0, device=mask.device, dtype=torch.float32)
+        metrics: dict[str, float] = {}
+        mult = self._aux_multiplier()
+        for hz in self.multi_horizon_horizons:
+            pred = pred_by_h[hz]
+            if pred.ndim > 3 and pred.shape[-1] == 1:
+                pred = pred[..., 0]
+            y = y_by_h[hz].float()
+            self._validate_shapes(y_pred=pred, y_true=y, mask=mask)
+            w = mask.float()
+            cos = self._weighted_cosine_similarity(pred.float(), y, w) if mask.any() else torch.tensor(0.0, device=pred.device)
+            mse = self._weighted_mean((pred.float() - y).pow(2), w) if mask.any() else torch.tensor(0.0, device=pred.device)
+            if self.multi_horizon_loss_type == "mse":
+                lh = mse
+            elif self.multi_horizon_loss_type == "mse_plus_global_cosine":
+                lh = mse - cos
+            else:
+                lh = -cos
+            wt = self.multi_horizon_main_weight if hz == self.multi_horizon_main else self.multi_horizon_aux_weights.get(hz, 0.0) * mult
+            total = total + float(wt) * lh
+            metrics[f"loss_horizon_{hz}"] = float(lh.detach().item())
+            metrics[f"cos_horizon_{hz}"] = float(cos.detach().item())
+            metrics[f"mse_horizon_{hz}"] = float(mse.detach().item())
+            if hz != self.multi_horizon_main:
+                metrics[f"multi_horizon_aux_weight_{hz}"] = float(wt)
+        metrics["cosine_similarity"] = metrics.get(f"cos_horizon_{self.multi_horizon_main}", 0.0)
+        metrics["mse"] = metrics.get(f"mse_horizon_{self.multi_horizon_main}", 0.0)
+        return ObjectiveOutput(loss=total, metrics=metrics)
 
     def __repr__(self) -> str:
         def fmt_float(x: float | None) -> str:

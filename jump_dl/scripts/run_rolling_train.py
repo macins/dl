@@ -271,6 +271,7 @@ def _build_objective(
         aux_inc_huber_weight=float(objective_cfg.get("aux_inc_huber_weight", 0.0)),
         aux_huber_delta=float(objective_cfg.get("aux_huber_delta", 1.0)),
         aux_horizon_weights=objective_cfg.get("aux_horizon_weights"),
+        multi_horizon=objective_cfg.get("multi_horizon"),
     )
 
 
