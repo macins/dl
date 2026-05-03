@@ -127,15 +127,24 @@ class CausalPatchMemoryCrossAttention(nn.Module):
         B, T, D = x.shape
         p = T // s
         if p == 0:
-            mem = x[:, :1, :].zeros(B, 1, D)
-            end = torch.full((1,), -1, device=x.device, dtype=torch.long)
-            return mem, end
-        main = x[:, : p * s, :].reshape(B, p, s, D).mean(dim=2)
-        ends = torch.arange(s - 1, p * s, s, device=x.device)
+            main = x[:, :0, :]
+            ends = torch.zeros((0,), device=x.device, dtype=torch.long)
+        else:
+            main = x[:, : p * s, :].reshape(B, p, s, D).mean(dim=2)
+            ends = torch.arange(s - 1, p * s, s, device=x.device)
+
+        # Always prepend one sentinel memory token that is valid for all query
+        # time steps to avoid all-masked attention rows (which can produce NaNs).
+        sentinel = torch.zeros(B, 1, D, device=x.device, dtype=x.dtype)
+        mem = torch.cat([sentinel, main], dim=1)
+        sentinel_end = torch.full((1,), -1, device=x.device, dtype=torch.long)
+        ends = torch.cat([sentinel_end, ends], dim=0)
+
         if self.max_patches is not None and p > self.max_patches:
-            main = main[:, -self.max_patches :, :]
-            ends = ends[-self.max_patches :]
-        return main, ends
+            keep = int(self.max_patches)
+            mem = torch.cat([mem[:, :1, :], mem[:, -keep:, :]], dim=1)
+            ends = torch.cat([ends[:1], ends[-keep:]], dim=0)
+        return mem, ends
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x3 = x if x.ndim == 3 else x.reshape(-1, x.shape[-2], x.shape[-1])
