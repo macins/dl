@@ -223,6 +223,44 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+
+
+def _maybe_fill_multi_horizon_label_stats(
+    objective_cfg: Mapping[str, Any],
+    target_stats: Mapping[str, Mapping[str, float]],
+) -> dict[str, Any]:
+    out = dict(objective_cfg)
+    mh = out.get("multi_horizon")
+    if not isinstance(mh, Mapping):
+        return out
+    mh_out = dict(mh)
+    if not bool(mh_out.get("enabled", False)):
+        out["multi_horizon"] = mh_out
+        return out
+    if not bool(mh_out.get("normalize_per_horizon", True)):
+        out["multi_horizon"] = mh_out
+        return out
+
+    label_keys = mh_out.get("label_keys", {})
+    if not isinstance(label_keys, Mapping):
+        out["multi_horizon"] = mh_out
+        return out
+
+    label_std = dict(mh_out.get("label_std", {}))
+    label_mean = dict(mh_out.get("label_mean", {}))
+    for hz_k, lbl in label_keys.items():
+        key = str(lbl)
+        stats = target_stats.get(key, {})
+        if label_std.get(hz_k) is None:
+            std = float(stats.get("std", 1.0) or 1.0)
+            label_std[hz_k] = std
+        if label_mean.get(hz_k) is None:
+            label_mean[hz_k] = float(stats.get("mean", 0.0))
+
+    mh_out["label_std"] = label_std
+    mh_out["label_mean"] = label_mean
+    out["multi_horizon"] = mh_out
+    return out
 def _build_objective(
     cfg: Mapping[str, Any],
     *,
@@ -230,6 +268,7 @@ def _build_objective(
     target_stats: Mapping[str, Mapping[str, float]],
 ) -> CosineSimilarityObjective:
     objective_cfg = dict(cfg.get("objective", {}))
+    objective_cfg = _maybe_fill_multi_horizon_label_stats(objective_cfg, target_stats)
     target_key = str(objective_cfg.get("target_key", cfg.get("target_col", "ret_30min")))
     target_cols = _resolve_target_cols(dataset_cfg)
     inferred_target_index = objective_cfg.get("target_index")

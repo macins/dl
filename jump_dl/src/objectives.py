@@ -200,7 +200,7 @@ class CosineSimilarityObjective(nn.Module):
         self.multi_horizon_main_weight = float(mh_loss.get("main_weight", 1.0))
         self.multi_horizon_aux_weights = {int(k): float(v) for k, v in dict(mh_loss.get("aux_weights", {})).items()}
         self.multi_horizon_label_std = {int(k): v for k, v in dict(mh_cfg.get("label_std", {})).items()}
-        self.multi_horizon_norm_per_h = bool(mh_cfg.get("normalize_per_horizon", False))
+        self.multi_horizon_norm_per_h = bool(mh_cfg.get("normalize_per_horizon", True))
         self.multi_horizon_aux_schedule = dict(mh_loss.get("aux_schedule", {}))
 
     # ------------------------------------------------------------------
