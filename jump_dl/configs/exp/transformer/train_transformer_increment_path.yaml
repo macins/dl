@@ -2,7 +2,7 @@ inherits:
   - ../../base/common/runtime.yaml
   - ../../base/objective/cosine_regression.yaml
   - ../../base/data/day_dataset.yaml
-  - ../../base/data/train_val_split_2013_2019.yaml
+  - ../../base/data/train_val_split_2013_2020.yaml
   - ../../base/model/transformer_sequence_regressor.yaml
   - ../../base/optimizer/adamw.yaml
   - ../../base/scheduler/cosine_60.yaml

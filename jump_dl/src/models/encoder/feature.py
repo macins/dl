@@ -218,20 +218,6 @@ class TabularSequenceEncoder(BaseEncoder):
         # context dim may depend on generated market_state / peer_state columns,
         # so keep LazyLinear here. Your trainer EMA has already been changed to
         # state_dict-based EMA, so LazyLinear is now safe.
-        if self.use_context_film:
-            self.context_mlp = nn.Sequential(
-                nn.LazyLinear(self.context_hidden_dim),
-                nn.SiLU(),
-                nn.Linear(self.context_hidden_dim, 2 * self.output_dim),
-            )
-            self.context_concat_projection = None
-        else:
-            self.context_mlp = None
-            self.context_concat_projection = nn.Sequential(
-                nn.LazyLinear(self.context_hidden_dim),
-                nn.SiLU(),
-                nn.Linear(self.context_hidden_dim, self.output_dim),
-            )
 
     @staticmethod
     def _check_same_layout(reference: torch.Tensor, x: torch.Tensor, *, name: str) -> None:
