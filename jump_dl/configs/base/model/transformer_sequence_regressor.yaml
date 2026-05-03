@@ -77,3 +77,37 @@ model:
     topk_k: null
     memory_pooling: mean
     cross_gate: true
+
+
+  long_term_memory:
+    enabled: false
+    mode: persistent
+    placement: pre_head
+    d_model: null
+    num_heads: 4
+    dropout: 0.0
+    residual_init: 0.0
+    memory_levels: [market]
+    num_market_slots: 16
+    num_symbol_slots: 4
+    num_symbols: null
+    use_symbol_embedding: false
+    use_layer_norm: true
+    use_gate: true
+    gate_type: scalar
+    read_mode: cross_attn
+    precomputed:
+      enabled: false
+      batch_key: rolling_memory
+      summary_dim: null
+      lookback_days: null
+      num_summary_slots: 4
+      encoder_type: mlp
+      pooling: mean
+      include_market_summary: true
+      include_symbol_summary: true
+    diagnostics:
+      enabled: true
+      log_gate: true
+      log_alpha: true
+      log_attention_entropy: false
