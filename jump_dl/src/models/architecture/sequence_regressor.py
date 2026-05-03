@@ -8,6 +8,7 @@ from ..backbone import build_backbone
 from ..encoder import build_encoder
 from ..head import build_head
 from ..registry import register_model
+from ..layers import SymbolQueryDecoder
 
 
 def _merge_config(
@@ -57,6 +58,7 @@ class _BaseSequenceRegressor(BaseModel):
         head: Mapping[str, object] | None = None,
         default_backbone_name: str = "gru_sequence",
         default_backbone_kwargs: Mapping[str, object] | None = None,
+        symbol_query_decoder: Mapping[str, object] | None = None,
     ) -> None:
         super().__init__()
 
@@ -96,15 +98,27 @@ class _BaseSequenceRegressor(BaseModel):
         )
         self.head = build_head(head_cfg)
 
+        sqd_cfg = dict(symbol_query_decoder or {})
+        self.symbol_query_decoder = None
+        if bool(sqd_cfg.get("enabled", False)):
+            sqd_cfg.pop("enabled", None)
+            sqd_cfg.pop("topk_indices_path", None)
+            sqd_cfg.setdefault("d_model", self.backbone.output_dim)
+            self.symbol_query_decoder = SymbolQueryDecoder(**sqd_cfg)
+
     def forward(self, batch: dict) -> dict:
         padding_mask = batch.get("padding_mask")
 
         x = self.encoder(batch)
         x = self.backbone(x, padding_mask=padding_mask)
+        if self.symbol_query_decoder is not None:
+            x = self.symbol_query_decoder(x, symbol_ids=batch.get("symbol_ids"))
         out = self.head(x)
 
         aux_losses = getattr(self.backbone, "last_aux_losses", {})
-        aux_metrics = getattr(self.backbone, "last_aux_metrics", {})
+        aux_metrics = dict(getattr(self.backbone, "last_aux_metrics", {}))
+        if self.symbol_query_decoder is not None:
+            aux_metrics.update(self.symbol_query_decoder.get_aux_stats())
 
         if aux_losses:
             out["aux_losses"] = aux_losses
