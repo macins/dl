@@ -7,7 +7,7 @@ model:
   multi_horizon:
     enabled: true
     mode: horizon_query_decoder
-    horizons: [5, 10, 15, 30, 60]
+    horizons: [5, 10, 15, 30]
     main_horizon: 30
     horizon_query_decoder:
       num_heads: 4

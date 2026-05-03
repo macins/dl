@@ -3,6 +3,14 @@ inherits:
 
 output_dir: workdirs/jump_dl/transformer_alibi_moe_multihorizon_aux_fixed
 
+data:
+  dataset:
+    target_cols:
+      - ret_5min
+      - ret_10min
+      - ret_15min
+      - ret_30min
+      
 model:
   multi_horizon:
     enabled: true
@@ -16,6 +24,7 @@ objective:
     horizons: [5, 10, 15, 30]
     main_horizon: 30
     label_keys: {5: ret_5min, 10: ret_10min, 15: ret_15min, 30: ret_30min}
+    noramliza_per_horizon: true
     loss:
       type: global_cosine
       main_weight: 1.0
