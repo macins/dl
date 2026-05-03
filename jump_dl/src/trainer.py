@@ -77,6 +77,8 @@ class TrainerConfig:
             "mog_nll",
         ]
     )
+    enable_tensorboard: bool = False
+    tensorboard_dirname: str = "tensorboard"
 
     def __post_init__(self) -> None:
         if isinstance(self.ema, dict):
@@ -127,6 +129,16 @@ class Trainer:
         # EMA 不再维护 deepcopy 出来的 ema_model。
         # 只维护 detached cloned state_dict，避免 LazyModule / non-leaf Tensor deepcopy 报错。
         self.ema_state_dict: dict[str, torch.Tensor] | None = None
+        self.tb_writer = None
+        if self.config.enable_tensorboard:
+            try:
+                from torch.utils.tensorboard import SummaryWriter
+            except Exception:  # pragma: no cover
+                SummaryWriter = None
+            if SummaryWriter is not None:
+                tb_dir = self.output_dir / str(self.config.tensorboard_dirname)
+                tb_dir.mkdir(parents=True, exist_ok=True)
+                self.tb_writer = SummaryWriter(log_dir=str(tb_dir))
 
     @staticmethod
     def _is_uninitialized_tensor(x: Any) -> bool:
@@ -789,6 +801,7 @@ class Trainer:
 
             current = float(row[monitor_name])
             history.append(row)  # type: ignore[arg-type]
+            self._log_tensorboard_epoch(row)
 
             self._save_history(history)  # type: ignore[arg-type]
 
@@ -814,7 +827,25 @@ class Trainer:
             else:
                 print(json.dumps(row, ensure_ascii=False), flush=True)
 
+        if self.tb_writer is not None:
+            self.tb_writer.flush()
+            self.tb_writer.close()
+
         return history  # type: ignore[return-value]
+
+    def _log_tensorboard_epoch(self, row: dict[str, float | int]) -> None:
+        if self.tb_writer is None:
+            return
+
+        epoch = int(row.get("epoch", 0))
+        for key, value in row.items():
+            if key == "epoch":
+                continue
+            if isinstance(value, (int, float)):
+                self.tb_writer.add_scalar(str(key), float(value), epoch)
+
+        if self.optimizer.param_groups:
+            self.tb_writer.add_scalar("lr", float(self.optimizer.param_groups[0]["lr"]), epoch)
 
     def _is_better(self, current: float, best: float | None) -> bool:
         if best is None:

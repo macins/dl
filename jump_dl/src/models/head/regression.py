@@ -103,6 +103,46 @@ class SequenceRegressionHead(BaseHead):
         return {"preds": {self.target_key: pred}}
 
 
+@register_head("increment_path")
+class IncrementPathHead(BaseHead):
+    def __init__(
+        self,
+        *,
+        input_dim: int,
+        target_key: str = "ret_30min",
+        num_horizons: int = 6,
+        use_layer_norm: bool = True,
+        path_key: str = "path",
+    ) -> None:
+        super().__init__()
+        self.input_dim = int(input_dim)
+        self.target_key = str(target_key)
+        self.num_horizons = int(num_horizons)
+        self.path_key = str(path_key)
+
+        if self.num_horizons <= 0:
+            raise ValueError(f"num_horizons must be positive, got {self.num_horizons}")
+
+        self.norm = nn.LayerNorm(self.input_dim) if use_layer_norm else nn.Identity()
+        self.proj = nn.Linear(self.input_dim, self.num_horizons, bias=False)
+
+    def forward(self, x: torch.Tensor) -> dict:
+        if x.shape[-1] != self.input_dim:
+            raise ValueError(
+                f"IncrementPathHead expected last dim={self.input_dim}, "
+                f"got {x.shape[-1]} for input shape {tuple(x.shape)}."
+            )
+
+        pred_inc = self.proj(self.norm(x))
+        pred_cum = torch.cumsum(pred_inc, dim=-1)
+        pred_30 = pred_cum[..., -1]
+
+        return {
+            "preds": {self.target_key: pred_30},
+            self.path_key: {"pred_inc": pred_inc, "pred_cum": pred_cum},
+        }
+
+
 @register_head("sequence_mog_regression")
 class SequenceMoGRegressionHead(BaseHead):
     """
