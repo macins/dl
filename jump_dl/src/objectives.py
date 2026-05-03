@@ -1015,7 +1015,7 @@ class CosineSimilarityObjective(nn.Module):
         return ObjectiveOutput(loss=total, metrics=metrics)
 
     def __repr__(self) -> str:
-        def fmt_float(x: float | None) -> str:
+        def fmt_float(x: float | int | None) -> str:
             if x is None:
                 return "None"
             x = float(x)
@@ -1025,21 +1025,36 @@ class CosineSimilarityObjective(nn.Module):
                 return f"{x:.3e}"
             return f"{x:.6g}"
 
+        def fmt_any(x: Any) -> str:
+            if x is None:
+                return "None"
+            if isinstance(x, bool):
+                return repr(x)
+            if isinstance(x, float):
+                return fmt_float(x)
+            if isinstance(x, int):
+                return str(x)
+            if isinstance(x, (list, tuple)):
+                return fmt_sequence(x)
+            if isinstance(x, Mapping):
+                return fmt_mapping(x)
+            return repr(x)
+
         def fmt_sequence(xs: list[Any] | tuple[Any, ...] | None) -> str:
             if xs is None:
                 return "None"
-            return "[" + ", ".join(fmt_float(x) if isinstance(x, float) else repr(x) for x in xs) + "]"
+            return "[" + ", ".join(fmt_any(x) for x in xs) + "]"
 
-        def fmt_mapping(m: Mapping[str, Any]) -> str:
+        def fmt_mapping(m: Mapping[Any, Any] | None) -> str:
+            if m is None:
+                return "None"
             if not m:
                 return "{}"
 
             parts = []
             for k, v in m.items():
-                if isinstance(v, float):
-                    parts.append(f"{k}={fmt_float(v)}")
-                else:
-                    parts.append(f"{k}={v!r}")
+                key = str(k)
+                parts.append(f"{key}={fmt_any(v)}")
 
             return "{" + ", ".join(parts) + "}"
 
@@ -1063,7 +1078,27 @@ class CosineSimilarityObjective(nn.Module):
             return (
                 f"{name}: {mode}, by={unit}, "
                 f"{start}->{end}, "
-                f"{fmt_float(start_weight)}->{fmt_float(end_weight)}"
+                f"{fmt_any(start_weight)}->{fmt_any(end_weight)}"
+            )
+
+        def fmt_multi_horizon_aux_schedule(cfg: Mapping[str, Any]) -> str:
+            if not cfg:
+                return "{}"
+
+            enabled = bool(cfg.get("enabled", False))
+            start = cfg.get("start_weight_multiplier", 1.0)
+            final = cfg.get("final_weight_multiplier", 1.0)
+            start_step = cfg.get("start_step", 0)
+            end_step = cfg.get("end_step", None)
+
+            return (
+                "{"
+                f"enabled={enabled}, "
+                f"start_weight_multiplier={fmt_any(start)}, "
+                f"final_weight_multiplier={fmt_any(final)}, "
+                f"start_step={fmt_any(start_step)}, "
+                f"end_step={fmt_any(end_step)}"
+                "}"
             )
 
         current_weights = self.get_current_loss_weights()
@@ -1106,6 +1141,29 @@ class CosineSimilarityObjective(nn.Module):
                 f"aux_inc_huber_weight={fmt_float(self.aux_inc_huber_weight)}, "
                 f"aux_huber_delta={fmt_float(self.aux_huber_delta)}, "
                 f"aux_horizon_weights={fmt_sequence(self.aux_horizon_weights)}),"
+            ),
+            (
+                "  multi_horizon="
+                f"(enabled={self.multi_horizon_enabled}, "
+                f"horizons={fmt_sequence(self.multi_horizon_horizons)}, "
+                f"main_horizon={self.multi_horizon_main}, "
+                f"label_keys={fmt_mapping(self.multi_horizon_label_keys)}),"
+            ),
+            (
+                "  multi_horizon_loss="
+                f"(type={self.multi_horizon_loss_type!r}, "
+                f"main_weight={fmt_float(self.multi_horizon_main_weight)}, "
+                f"aux_weights={fmt_mapping(self.multi_horizon_aux_weights)}, "
+                f"aux_multiplier={fmt_float(self._aux_multiplier())}),"
+            ),
+            (
+                "  multi_horizon_normalization="
+                f"(normalize_per_horizon={self.multi_horizon_norm_per_h}, "
+                f"label_std={fmt_mapping(self.multi_horizon_label_std)}),"
+            ),
+            (
+                "  multi_horizon_aux_schedule="
+                f"{fmt_multi_horizon_aux_schedule(self.multi_horizon_aux_schedule)},"
             ),
             (
                 "  progress="
