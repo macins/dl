@@ -20,6 +20,7 @@ model:
     num_horizons: 6
     path_key: path
     use_layer_norm: true
+
     
   backbone:
     name: transformer_sequence

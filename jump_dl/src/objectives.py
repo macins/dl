@@ -126,6 +126,8 @@ class CosineSimilarityObjective(nn.Module):
         pred_cum_key: str = "pred_cum",
         target_inc_key: str | None = None,
         target_inc_keys: list[str] | tuple[str, ...] | None = None,
+        target_inc_means: list[float] | tuple[float, ...] | None = None,
+        target_inc_stds: list[float] | tuple[float, ...] | None = None,
         target_cum_key: str | None = None,
         aux_cum_huber_weight: float = 0.0,
         aux_inc_huber_weight: float = 0.0,
@@ -155,6 +157,8 @@ class CosineSimilarityObjective(nn.Module):
         self.pred_cum_key = str(pred_cum_key)
         self.target_inc_key = None if target_inc_key is None else str(target_inc_key)
         self.target_inc_keys = None if target_inc_keys is None else [str(v) for v in target_inc_keys]
+        self.target_inc_means = None if target_inc_means is None else [float(v) for v in target_inc_means]
+        self.target_inc_stds = None if target_inc_stds is None else [float(v) if float(v) != 0.0 else 1.0 for v in target_inc_stds]
         self.target_cum_key = None if target_cum_key is None else str(target_cum_key)
         self.aux_cum_huber_weight = float(aux_cum_huber_weight)
         self.aux_inc_huber_weight = float(aux_inc_huber_weight)
@@ -839,7 +843,9 @@ class CosineSimilarityObjective(nn.Module):
                 )
             mask_h = valid.unsqueeze(-1).expand_as(pred_inc)
             w_h = w.unsqueeze(-1).expand_as(pred_inc)
-            inc_huber = F.huber_loss(pred_inc.float(), target_inc, delta=self.aux_huber_delta, reduction="none")
+            pred_inc_for_loss = pred_inc.float()
+            target_inc_for_loss = target_inc
+            inc_huber = F.huber_loss(pred_inc_for_loss, target_inc_for_loss, delta=self.aux_huber_delta, reduction="none")
             inc_huber = torch.where(mask_h, inc_huber, torch.zeros_like(inc_huber))
             denom = torch.sum(w_h).clamp_min(self.eps)
             aux_inc_huber = torch.sum(inc_huber * w_h) / denom
@@ -855,7 +861,23 @@ class CosineSimilarityObjective(nn.Module):
                 )
             mask_h = valid.unsqueeze(-1).expand_as(pred_inc)
             w_h = w.unsqueeze(-1).expand_as(pred_inc)
-            inc_huber = F.huber_loss(pred_inc.float(), target_inc, delta=self.aux_huber_delta, reduction="none")
+            pred_inc_for_loss = pred_inc.float()
+            target_inc_for_loss = target_inc
+            if self.target_inc_means is not None and self.target_inc_stds is not None:
+                means = torch.as_tensor(self.target_inc_means, device=pred_inc.device, dtype=pred_inc_for_loss.dtype)
+                stds = torch.as_tensor(self.target_inc_stds, device=pred_inc.device, dtype=pred_inc_for_loss.dtype).clamp_min(self.eps)
+                if means.numel() != pred_inc.shape[-1] or stds.numel() != pred_inc.shape[-1]:
+                    raise ValueError(
+                        "target_inc_means/target_inc_stds length mismatch with increment horizon dim: "
+                        f"means={means.numel()}, stds={stds.numel()}, horizon={pred_inc.shape[-1]}"
+                    )
+                view_shape = (*([1] * (pred_inc.ndim - 1)), -1)
+                means = means.view(*view_shape)
+                stds = stds.view(*view_shape)
+                pred_inc_for_loss = (pred_inc_for_loss - means) / stds
+                target_inc_for_loss = (target_inc_for_loss - means) / stds
+
+            inc_huber = F.huber_loss(pred_inc_for_loss, target_inc_for_loss, delta=self.aux_huber_delta, reduction="none")
             inc_huber = torch.where(mask_h, inc_huber, torch.zeros_like(inc_huber))
             denom = torch.sum(w_h).clamp_min(self.eps)
             aux_inc_huber = torch.sum(inc_huber * w_h) / denom
