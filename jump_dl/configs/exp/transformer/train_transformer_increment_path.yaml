@@ -26,7 +26,7 @@ objective:
   pred_key: ret_30min
   target_key: ret_30min
   target_inc_keys:
-    - ret_0_5min
+    - ret_5min
     - ret_5_10min
     - ret_10_15min
     - ret_15_20min
@@ -49,7 +49,7 @@ data:
   dataset:
     target_cols:
       - ret_30min
-      - ret_0_5min
+      - ret_5min
       - ret_5_10min
       - ret_10_15min
       - ret_15_20min
