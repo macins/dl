@@ -9,24 +9,24 @@ data:
       - ret_5min
       - ret_10min
       - ret_15min
+      - ret_20min
       - ret_30min
       
 model:
   multi_horizon:
     enabled: true
     mode: aux_heads
-    horizons: [5, 10, 15, 30]
+    horizons: [5, 10, 15, 20, 30]
     main_horizon: 30
 
 objective:
   multi_horizon:
     enabled: true
-    horizons: [5, 10, 15, 30]
+    horizons: [5, 10, 15, 20, 30]
     main_horizon: 30
-    label_keys: {5: ret_5min, 10: ret_10min, 15: ret_15min, 30: ret_30min}
-    noramliza_per_horizon: true
+    label_keys: {5: ret_5min, 10: ret_10min, 15: ret_15min, 20: ret_20min, 30: ret_30min}
     loss:
       type: global_cosine
       main_weight: 1.0
-      aux_weights: {5: 0.1, 10: 0.1, 15: 0.1}
+      aux_weights: {5: 1.0, 10: 1.0, 15: 1.0, 20: 1.0}
       aux_schedule: {enabled: false}

@@ -1,5 +1,5 @@
 inherits:
-  - ./train_transformer_alibi_moe.yaml
+  - ./train_transformer_increment_path.yaml
 
 training:
   nexus:
