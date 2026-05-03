@@ -30,6 +30,22 @@ model:
     aux_loss_weight: 1.0e-2
     router_z_loss_weight: 1.0e-3
     shared_experts: 0
+    multi_resolution:
+      enabled: false
+      placement: none
+      scales: [5, 15, 30]
+      fusion: softmax_gate
+      conv_type: depthwise
+      dropout: 0.0
+      residual_scale: 1.0
+      insert_every_n_layers: 2
+      start_layer: 0
+      end_layer: null
+      patch_memory:
+        enabled: false
+        num_heads: 4
+        include_partial_patch: false
+        max_patches: null
   head:
     name: sequence_regression
     target_key: ret_30min

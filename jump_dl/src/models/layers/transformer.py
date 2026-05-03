@@ -5,6 +5,7 @@ from typing import Any
 
 from .norms import build_norm
 from .codebook import CodebookAdapter
+from .multiresolution import MultiResolutionSublayer, CausalPatchMemoryCrossAttention
 from .registry import register_block
 from ...utils.externals import ensure_torch
 
@@ -2268,13 +2269,15 @@ def _normalize_sublayer_specs(
             "moe_ffn",
             "cross_symbol_lagged_attention",
             "codebook_adapter",
+            "multiresolution",
+            "patch_memory",
         }:
             raise ValueError(
                 f"Unknown sublayer type {layer_type!r}. "
                 "Supported: attention, cross_symbol_attention, cross_symbol_film, "
                 "cross_symbol_memory_attention, cross_symbol_memory_film, "
                 "cross_symbol_lagged_attention, "
-                "temporal_gru, ffn, moe_ffn, codebook_adapter."
+                "temporal_gru, ffn, moe_ffn, codebook_adapter, multiresolution, patch_memory."
             )
 
         spec["type"] = layer_type
@@ -2388,6 +2391,15 @@ class _ResidualSubLayer(nn.Module):
         elif self.layer_type == "moe_ffn":
             out, losses, metrics = self.module(y, padding_mask=padding_mask)
             x = x + self.residual_scale * self.dropout(out)
+        elif self.layer_type == "multiresolution":
+            out = self.module(y, padding_mask=padding_mask)
+            x = x + self.residual_scale * self.dropout(out - y)
+            metrics.update(self.module.get_aux_stats())
+
+        elif self.layer_type == "patch_memory":
+            out = self.module(y)
+            x = x + self.residual_scale * self.dropout(out - y)
+
         elif self.layer_type == "codebook_adapter":
             out, aux = self.module(x, return_aux=True)
             x = out
@@ -2755,6 +2767,28 @@ class TransformerEncoderBlock(nn.Module):
                     ),
                     shared_experts=int(spec.pop("shared_experts", shared_experts)),
                 )
+            elif layer_type == "multiresolution":
+                module = MultiResolutionSublayer(
+                    d_model=self.hidden_size,
+                    norm_type=layer_norm_type,
+                    norm_eps=layer_norm_eps,
+                    scales=spec.pop("scales", (5, 15, 30)),
+                    dropout=float(spec.pop("multires_dropout", layer_dropout)),
+                    conv_type=str(spec.pop("conv_type", "depthwise")),
+                    fusion=str(spec.pop("fusion", "softmax_gate")),
+                    residual_scale=float(spec.pop("multires_residual_scale", 1.0)),
+                )
+            elif layer_type == "patch_memory":
+                module = CausalPatchMemoryCrossAttention(
+                    d_model=self.hidden_size,
+                    scales=spec.pop("scales", (5, 15, 30)),
+                    num_heads=int(spec.pop("num_heads", num_heads)),
+                    dropout=float(spec.pop("multires_dropout", layer_dropout)),
+                    max_patches=spec.pop("max_patches", None),
+                    include_partial_patch=bool(spec.pop("include_partial_patch", False)),
+                    residual_scale=float(spec.pop("multires_residual_scale", 1.0)),
+                )
+
             elif layer_type == "codebook_adapter":
                 module = CodebookAdapter(
                     d_model=self.hidden_size,
