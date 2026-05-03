@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .norms import build_norm
+from .codebook import CodebookAdapter
 from .registry import register_block
 from ...utils.externals import ensure_torch
 
@@ -2250,6 +2251,8 @@ def _normalize_sublayer_specs(
             "moeffn": "moe_ffn",
             "moe-feedforward": "moe_ffn",
             "moe_feedforward": "moe_ffn",
+            "codebook": "codebook_adapter",
+            "codebook_adapter": "codebook_adapter",
         }
 
         layer_type = aliases.get(layer_type, layer_type)
@@ -2264,13 +2267,14 @@ def _normalize_sublayer_specs(
             "ffn",
             "moe_ffn",
             "cross_symbol_lagged_attention",
+            "codebook_adapter",
         }:
             raise ValueError(
                 f"Unknown sublayer type {layer_type!r}. "
                 "Supported: attention, cross_symbol_attention, cross_symbol_film, "
                 "cross_symbol_memory_attention, cross_symbol_memory_film, "
                 "cross_symbol_lagged_attention, "
-                "temporal_gru, ffn, moe_ffn."
+                "temporal_gru, ffn, moe_ffn, codebook_adapter."
             )
 
         spec["type"] = layer_type
@@ -2384,6 +2388,12 @@ class _ResidualSubLayer(nn.Module):
         elif self.layer_type == "moe_ffn":
             out, losses, metrics = self.module(y, padding_mask=padding_mask)
             x = x + self.residual_scale * self.dropout(out)
+        elif self.layer_type == "codebook_adapter":
+            out, aux = self.module(x, return_aux=True)
+            x = out
+            metrics["codebook_entropy"] = float(aux["code_attn_entropy"].detach().item())
+            metrics["codebook_effective_num"] = float(aux["code_effective_num"].detach().item())
+            metrics["codebook_gate"] = float(aux["code_gate"].detach().item())
 
         else:
             raise RuntimeError(f"Unexpected layer_type={self.layer_type!r}")
@@ -2430,6 +2440,16 @@ class TransformerEncoderBlock(nn.Module):
         return_register_tokens: bool = False,
 
         attention_projection_sharing: str | Sequence[str] | None = "none",
+        codebook_enabled: bool = False,
+        codebook_num_codes: int = 128,
+        codebook_num_heads: int = 4,
+        codebook_dropout: float = 0.0,
+        codebook_topk: int | None = None,
+        codebook_temperature: float = 1.0,
+        codebook_residual_gate_init: float = 0.0,
+        codebook_use_layernorm: bool = True,
+        codebook_share_kv: bool = False,
+        codebook_position: str = "after_ffn",
     ) -> None:
         super().__init__()
 
@@ -2488,6 +2508,28 @@ class TransformerEncoderBlock(nn.Module):
             sublayers,
             use_moe=self.use_moe,
         )
+        if codebook_enabled:
+            codebook_position = str(codebook_position).strip().lower()
+            if codebook_position not in {"after_attn", "after_ffn"}:
+                raise ValueError("codebook_position must be one of: after_attn, after_ffn.")
+            codebook_spec = {
+                "type": "codebook_adapter",
+                "num_codes": int(codebook_num_codes),
+                "num_heads": int(codebook_num_heads),
+                "dropout": float(codebook_dropout),
+                "topk": codebook_topk,
+                "temperature": float(codebook_temperature),
+                "residual_gate_init": float(codebook_residual_gate_init),
+                "use_layernorm": bool(codebook_use_layernorm),
+                "share_kv_codebook": bool(codebook_share_kv),
+            }
+            insert_idx = len(specs)
+            if codebook_position == "after_attn":
+                for j, spec in enumerate(specs):
+                    if str(spec.get("type", "")).strip().lower() == "attention":
+                        insert_idx = j + 1
+                        break
+            specs.insert(insert_idx, codebook_spec)
 
         layers: list[_ResidualSubLayer] = []
 
@@ -2712,6 +2754,19 @@ class TransformerEncoderBlock(nn.Module):
                         spec.pop("router_z_loss_weight", router_z_loss_weight)
                     ),
                     shared_experts=int(spec.pop("shared_experts", shared_experts)),
+                )
+            elif layer_type == "codebook_adapter":
+                module = CodebookAdapter(
+                    d_model=self.hidden_size,
+                    num_codes=int(spec.pop("num_codes", 128)),
+                    num_heads=int(spec.pop("num_heads", 4)),
+                    dropout=float(spec.pop("dropout", 0.0)),
+                    topk=spec.pop("topk", None),
+                    temperature=float(spec.pop("temperature", 1.0)),
+                    residual_gate_init=float(spec.pop("residual_gate_init", 0.0)),
+                    use_layernorm=bool(spec.pop("use_layernorm", True)),
+                    share_kv_codebook=bool(spec.pop("share_kv_codebook", False)),
+                    return_aux=bool(spec.pop("return_aux", False)),
                 )
 
             else:

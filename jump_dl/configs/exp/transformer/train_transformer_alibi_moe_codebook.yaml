@@ -1,0 +1,33 @@
+inherits:
+  - ../../base/common/runtime.yaml
+  - ../../base/objective/cosine_regression.yaml
+  - ../../base/data/shared_dataset.yaml
+  - ../../base/data/train_val_split_2013_2019.yaml
+  - ../../base/loader/train_gpu.yaml
+  - ../../base/loader/val_gpu.yaml
+  - ../../base/model/transformer_sequence_regressor.yaml
+  - ../../base/optimizer/adamw.yaml
+  - ../../base/scheduler/cosine_60.yaml
+  - ../../base/trainer/default.yaml
+
+output_dir: workdirs/jump_dl/transformer_alibi_moe_codebook
+
+model:
+  backbone:
+    position_encoding: alibi
+    use_moe: true
+    num_experts: 8
+    top_k: 2
+    aux_loss_weight: 1.0e-2
+    router_z_loss_weight: 0
+    shared_experts: 0
+    codebook_enabled: true
+    codebook_num_codes: 128
+    codebook_num_heads: 4
+    codebook_dropout: 0.05
+    codebook_topk: null
+    codebook_temperature: 1.0
+    codebook_residual_gate_init: 0.0
+    codebook_use_layernorm: true
+    codebook_share_kv: false
+    codebook_position: after_ffn
