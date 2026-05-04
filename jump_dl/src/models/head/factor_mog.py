@@ -18,7 +18,7 @@ def _inverse_softplus(x: float) -> float:
 
 @register_head("conditional_latent_factor_mog")
 class ConditionalLatentFactorMoGHead(BaseHead):
-    def __init__(self, *, input_dim: int, target_key: str = "ret_30min", num_factors: int = 16, num_components: int = 4,
+    def __init__(self, *, input_dim: int, target_key: str = "ret_30min", output_dim: int = 1, num_factors: int = 16, num_components: int = 4,
                  hidden_dim: int | None = None, dropout: float = 0.0, final_step_only: bool = False,
                  exposure_normalize: bool = True, use_layernorm: bool = True, min_factor_sigma: float = 1e-4,
                  min_residual_sigma: float = 1e-4, max_sigma: float | None = None, market_pooling: str = "mean",
@@ -26,6 +26,9 @@ class ConditionalLatentFactorMoGHead(BaseHead):
         super().__init__()
         self.input_dim = int(input_dim)
         self.target_key = str(target_key)
+        self.output_dim = int(output_dim)
+        if self.output_dim != 1:
+            raise ValueError(f"ConditionalLatentFactorMoGHead currently supports output_dim=1 only, got {self.output_dim}.")
         self.num_factors = int(num_factors)
         self.num_components = int(num_components)
         self.final_step_only = bool(final_step_only)
