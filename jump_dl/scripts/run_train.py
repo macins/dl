@@ -16,7 +16,7 @@ from datetime import date, datetime
 from jump_dl.src.config import load_config_with_inheritance
 from jump_dl.src.dataio import build_slice_dataloader, build_market_day_dataloader
 from jump_dl.src.models import build_model
-from jump_dl.src.objectives import CosineSimilarityObjective, MoGRegressionObjective
+from jump_dl.src.objectives import CosineSimilarityObjective, MoGRegressionObjective, FactorMoGWithAuxObjective
 from jump_dl.src.optimizers import build_optimizer
 from jump_dl.src.schedulers import build_scheduler
 from jump_dl.src.trainer import Trainer, TrainerConfig
