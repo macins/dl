@@ -1,14 +1,6 @@
 model:
   name: transformer_panel_regressor
   target_key: ret_30min
-
-  head:
-    name: increment_path
-    target_key: ret_30min
-    num_horizons: 4
-    path_key: path
-    use_layer_norm: true
-
     
   backbone:
     name: transformer_sequence

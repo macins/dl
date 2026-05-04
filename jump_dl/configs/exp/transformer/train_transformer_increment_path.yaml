@@ -2,7 +2,7 @@ inherits:
   - ../../base/common/runtime.yaml
   - ../../base/objective/cosine_regression.yaml
   - ../../base/data/day_dataset.yaml
-  - ../../base/data/train_val_split_2013_2020.yaml
+  - ../../base/data/train_val_split_2013_2019.yaml
   - ../../base/model/transformer_sequence_regressor.yaml
   - ../../base/optimizer/adamw.yaml
   - ../../base/scheduler/cosine_60.yaml
@@ -14,6 +14,14 @@ model:
   name: transformer_panel_regressor
   target_key: ret_30min
 
+  head:
+    name: increment_path
+    target_key: ret_30min
+    num_horizons: 4
+    path_key: path
+    use_layer_norm: true
+
+    
   backbone:
     name: transformer_sequence
     hidden_size: 256
