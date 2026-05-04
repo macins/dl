@@ -602,6 +602,39 @@ def _resolve_dataset_cfgs(data_cfg: Mapping[str, Any]) -> tuple[dict[str, Any], 
     return train_dataset_cfg, val_dataset_cfg
 
 
+
+
+def _ensure_multi_horizon_target_cols(
+    cfg: Mapping[str, Any],
+    train_dataset_cfg: dict[str, Any],
+    val_dataset_cfg: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    objective_cfg = cfg.get("objective", {})
+    if not isinstance(objective_cfg, Mapping):
+        return train_dataset_cfg, val_dataset_cfg
+
+    mh_cfg = objective_cfg.get("multi_horizon", {})
+    if not isinstance(mh_cfg, Mapping) or not bool(mh_cfg.get("enabled", False)):
+        return train_dataset_cfg, val_dataset_cfg
+
+    label_keys = mh_cfg.get("label_keys", {})
+    if not isinstance(label_keys, Mapping):
+        return train_dataset_cfg, val_dataset_cfg
+
+    required_cols = _unique_preserve_order([str(v) for v in label_keys.values()])
+    if not required_cols:
+        return train_dataset_cfg, val_dataset_cfg
+
+    def _merge_target_cols(dataset_cfg: dict[str, Any]) -> dict[str, Any]:
+        merged = dict(dataset_cfg)
+        existing = _resolve_target_cols(merged)
+        merged["target_cols"] = _unique_preserve_order([*existing, *required_cols])
+        return merged
+
+    train_out = _merge_target_cols(train_dataset_cfg)
+    val_out = _merge_target_cols(val_dataset_cfg) if val_dataset_cfg is not None else None
+    return train_out, val_out
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run jump_dl training.")
     parser.add_argument("--config", required=True)
@@ -823,6 +856,11 @@ def main() -> None:
 
     data_cfg = dict(cfg["data"])
     train_dataset_cfg, val_dataset_cfg = _resolve_dataset_cfgs(data_cfg)
+    train_dataset_cfg, val_dataset_cfg = _ensure_multi_horizon_target_cols(
+        cfg,
+        train_dataset_cfg,
+        val_dataset_cfg,
+    )
     model_cfg = _inject_vocab_sizes(dict(cfg["model"]), train_dataset_cfg)
     
     print("Building model...")
