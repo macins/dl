@@ -1,0 +1,32 @@
+inherits:
+  - ./train_transformer_alibi_moe_nexus.yaml
+
+output_dir: workdirs/jump_dl/encdec_ablation_local_market
+
+model:
+  name: encoder_decoder_sequence_regressor
+  input_dim: 256
+  target_key: ret_30min
+
+  d_model: 256
+  d_ff: 512
+  n_heads: 8
+  dropout: 0.1
+  adapter_type: linear
+  adapter_norm: true
+
+  n_local_layers: 2
+
+  use_product_memory: false
+  n_product_layers: 0
+  use_market_memory: true
+  n_market_layers: 1
+  use_factor_memory: false
+  n_factor_temporal_layers: 0
+
+  n_decoder_layers: 1
+  decoder_memory_order: [local, market]
+
+  num_horizons: 1
+  use_horizon_embedding: false
+  output_mode: single_horizon

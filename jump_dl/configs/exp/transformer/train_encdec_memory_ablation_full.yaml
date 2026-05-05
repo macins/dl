@@ -1,0 +1,54 @@
+inherits:
+  - ./train_transformer_alibi_moe_nexus.yaml
+
+output_dir: workdirs/jump_dl/encdec_ablation_full
+
+data:
+  dataset:
+    target_cols:
+      - ret_5min
+      - ret_10min
+      - ret_15min
+      - ret_20min
+      - ret_30min
+
+model:
+  name: encoder_decoder_sequence_regressor
+  input_dim: 256
+  target_key: ret_30min
+
+  d_model: 256
+  d_ff: 512
+  n_heads: 8
+  dropout: 0.1
+  adapter_type: linear
+  adapter_norm: true
+
+  n_local_layers: 4
+
+  use_product_memory: true
+  n_product_layers: 1
+  use_market_memory: true
+  n_market_layers: 1
+  use_factor_memory: true
+  num_factor_tokens: 16
+  n_factor_temporal_layers: 1
+  factor_cross_n_heads: 4
+
+  n_decoder_layers: 2
+  decoder_memory_order: [local, product, market, factor]
+
+  num_horizons: 5
+  use_horizon_embedding: true
+  output_mode: multi_horizon
+
+objective:
+  multi_horizon:
+    enabled: true
+    horizons: [5, 10, 15, 20, 30]
+    main_horizon: 30
+    label_keys: {5: ret_5min, 10: ret_10min, 15: ret_15min, 20: ret_20min, 30: ret_30min}
+    loss:
+      type: global_cosine
+      main_weight: 1.0
+      aux_weights: {5: 0.3, 10: 0.3, 15: 0.3, 20: 0.3}
