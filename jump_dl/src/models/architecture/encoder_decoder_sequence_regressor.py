@@ -4,6 +4,7 @@ from collections.abc import Sequence
 
 from ..base import BaseModel
 from ..registry import register_model
+from ..layers.transformer import FeedForward, MoEFeedForward
 from ...utils.externals import ensure_torch
 
 torch = ensure_torch()
@@ -11,17 +12,24 @@ nn = torch.nn
 
 
 class _CausalSelfAttnBlock(nn.Module):
-    def __init__(self, d_model: int, n_heads: int, d_ff: int, dropout: float) -> None:
+    def __init__(self, d_model: int, n_heads: int, d_ff: int, dropout: float, ffn_activation: str = "swiglu",
+                 use_moe: bool = False, num_experts: int = 8, top_k: int = 2, shared_experts: int = 0) -> None:
         super().__init__()
         self.ln1 = nn.LayerNorm(d_model)
         self.attn = nn.MultiheadAttention(d_model, n_heads, dropout=dropout, batch_first=True)
         self.ln2 = nn.LayerNorm(d_model)
-        self.ffn = nn.Sequential(
-            nn.Linear(d_model, d_ff),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(d_ff, d_model),
-            nn.Dropout(dropout),
+        self.ffn = (
+            MoEFeedForward(
+                hidden_size=d_model,
+                dense_ffn_hidden_size=d_ff,
+                num_experts=num_experts,
+                top_k=top_k,
+                shared_experts=shared_experts,
+                activation=ffn_activation,
+                dropout=dropout,
+            )
+            if use_moe
+            else FeedForward(hidden_size=d_model, ffn_hidden_size=d_ff, activation=ffn_activation, dropout=dropout)
         )
 
     def forward(self, x: torch.Tensor, attn_mask: torch.Tensor) -> torch.Tensor:
@@ -33,13 +41,26 @@ class _CausalSelfAttnBlock(nn.Module):
 
 
 class _CrossAttnBlock(nn.Module):
-    def __init__(self, d_model: int, n_heads: int, d_ff: int, dropout: float) -> None:
+    def __init__(self, d_model: int, n_heads: int, d_ff: int, dropout: float, ffn_activation: str = "swiglu",
+                 use_moe: bool = False, num_experts: int = 8, top_k: int = 2, shared_experts: int = 0) -> None:
         super().__init__()
         self.ln_q = nn.LayerNorm(d_model)
         self.ln_kv = nn.LayerNorm(d_model)
         self.cross = nn.MultiheadAttention(d_model, n_heads, dropout=dropout, batch_first=True)
         self.ln2 = nn.LayerNorm(d_model)
-        self.ffn = nn.Sequential(nn.Linear(d_model, d_ff), nn.GELU(), nn.Dropout(dropout), nn.Linear(d_ff, d_model), nn.Dropout(dropout))
+        self.ffn = (
+            MoEFeedForward(
+                hidden_size=d_model,
+                dense_ffn_hidden_size=d_ff,
+                num_experts=num_experts,
+                top_k=top_k,
+                shared_experts=shared_experts,
+                activation=ffn_activation,
+                dropout=dropout,
+            )
+            if use_moe
+            else FeedForward(hidden_size=d_model, ffn_hidden_size=d_ff, activation=ffn_activation, dropout=dropout)
+        )
 
     def forward(self, q: torch.Tensor, kv: torch.Tensor, attn_mask: torch.Tensor) -> torch.Tensor:
         y, _ = self.cross(self.ln_q(q), self.ln_kv(kv), self.ln_kv(kv), attn_mask=attn_mask, need_weights=False)
@@ -60,7 +81,9 @@ class EncoderDecoderSequenceRegressor(BaseModel):
                  num_horizons: int = 1, use_symbol_embedding: bool = False, num_symbols: int | None = None,
                  use_time_embedding: bool = False, max_time_steps: int | None = None,
                  use_horizon_embedding: bool = True, use_product_embedding: bool = False,
-                 output_mode: str = "single_horizon", head_type: str = "mlp", head_hidden_dim: int = 256,
+                 output_mode: str = "single_horizon", head_type: str = "linear", head_hidden_dim: int = 256,
+                 ffn_activation: str = "swiglu", use_moe: bool = True, num_experts: int = 8, top_k: int = 2,
+                 shared_experts: int = 0,
                  target_key: str = "ret_30min") -> None:
         super().__init__()
         if adapter_type != "linear":
@@ -81,10 +104,10 @@ class EncoderDecoderSequenceRegressor(BaseModel):
         self.adapter_norm = nn.LayerNorm(d_model) if adapter_norm else nn.Identity()
         self.adapter_drop = nn.Dropout(dropout)
 
-        self.local_blocks = nn.ModuleList([_CausalSelfAttnBlock(d_model, n_heads, d_ff, dropout) for _ in range(n_local_layers)])
-        self.product_blocks = nn.ModuleList([_CausalSelfAttnBlock(d_model, n_heads, d_ff, dropout) for _ in range(n_product_layers)])
-        self.market_blocks = nn.ModuleList([_CausalSelfAttnBlock(d_model, n_heads, d_ff, dropout) for _ in range(n_market_layers)])
-        self.factor_temporal_blocks = nn.ModuleList([_CausalSelfAttnBlock(d_model, n_heads, d_ff, dropout) for _ in range(n_factor_temporal_layers)])
+        self.local_blocks = nn.ModuleList([_CausalSelfAttnBlock(d_model, n_heads, d_ff, dropout, ffn_activation, use_moe, num_experts, top_k, shared_experts) for _ in range(n_local_layers)])
+        self.product_blocks = nn.ModuleList([_CausalSelfAttnBlock(d_model, n_heads, d_ff, dropout, ffn_activation, use_moe, num_experts, top_k, shared_experts) for _ in range(n_product_layers)])
+        self.market_blocks = nn.ModuleList([_CausalSelfAttnBlock(d_model, n_heads, d_ff, dropout, ffn_activation, use_moe, num_experts, top_k, shared_experts) for _ in range(n_market_layers)])
+        self.factor_temporal_blocks = nn.ModuleList([_CausalSelfAttnBlock(d_model, n_heads, d_ff, dropout, ffn_activation, use_moe, num_experts, top_k, shared_experts) for _ in range(n_factor_temporal_layers)])
 
         self.factor_query = nn.Parameter(torch.randn(num_factor_tokens, d_model) * 0.02)
         self.factor_cross = nn.MultiheadAttention(d_model, factor_cross_n_heads, dropout=dropout, batch_first=True)
@@ -96,10 +119,10 @@ class EncoderDecoderSequenceRegressor(BaseModel):
         self.product_embedding = nn.Embedding(4096, d_model) if self.use_product_embedding else None
 
         self.decoder_layers = nn.ModuleList([nn.ModuleDict({
-            "local": _CrossAttnBlock(d_model, n_heads, d_ff, dropout),
-            "product": _CrossAttnBlock(d_model, n_heads, d_ff, dropout),
-            "market": _CrossAttnBlock(d_model, n_heads, d_ff, dropout),
-            "factor": _CrossAttnBlock(d_model, n_heads, d_ff, dropout),
+            "local": _CrossAttnBlock(d_model, n_heads, d_ff, dropout, ffn_activation, use_moe, num_experts, top_k, shared_experts),
+            "product": _CrossAttnBlock(d_model, n_heads, d_ff, dropout, ffn_activation, use_moe, num_experts, top_k, shared_experts),
+            "market": _CrossAttnBlock(d_model, n_heads, d_ff, dropout, ffn_activation, use_moe, num_experts, top_k, shared_experts),
+            "factor": _CrossAttnBlock(d_model, n_heads, d_ff, dropout, ffn_activation, use_moe, num_experts, top_k, shared_experts),
         }) for _ in range(n_decoder_layers)])
 
         self.head_norm = nn.LayerNorm(d_model)

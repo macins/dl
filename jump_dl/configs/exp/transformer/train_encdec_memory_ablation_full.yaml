@@ -23,6 +23,11 @@ model:
   d_ff: 512
   n_heads: 8
   dropout: 0.1
+  ffn_activation: swiglu
+  use_moe: true
+  num_experts: 8
+  top_k: 2
+  shared_experts: 0
   adapter_type: linear
   adapter_norm: true
 
@@ -42,6 +47,7 @@ model:
 
   num_horizons: 5
   use_horizon_embedding: true
+  head_type: linear
   output_mode: multi_horizon
 
 objective:
