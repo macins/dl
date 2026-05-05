@@ -13,6 +13,7 @@ data:
       - ret_30min
 
 model:
+  __replace__: true
   name: encoder_decoder_sequence_regressor
   input_dim: 256
   target_key: ret_30min

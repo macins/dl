@@ -37,6 +37,11 @@ def load_config(path: str | Path) -> dict[str, Any]:
 def _deep_merge(base: dict[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:
     out = deepcopy(base)
     for key, value in override.items():
+        if isinstance(value, Mapping) and bool(value.get("__replace__", False)):
+            replaced = dict(value)
+            replaced.pop("__replace__", None)
+            out[key] = deepcopy(replaced)
+            continue
         if key in out and isinstance(out[key], dict) and isinstance(value, Mapping):
             out[key] = _deep_merge(out[key], value)
         else:
@@ -59,4 +64,3 @@ def load_config_with_inheritance(path: str | Path) -> dict[str, Any]:
             parent = (path.parent / parent).resolve()
         merged = _deep_merge(override=merged, base=load_config_with_inheritance(parent))
     return _deep_merge(merged, cfg)
-
