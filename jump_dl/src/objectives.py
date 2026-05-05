@@ -1222,3 +1222,116 @@ class MoGRegressionObjective(CosineSimilarityObjective):
         **kwargs,
     ) -> None:
         super().__init__(*args, lam_mog_nll=lam_mog_nll, **kwargs)
+
+def marginal_factor_mog_nll(target, exposure, factor_mu, factor_sigma, residual_sigma, mix_logits, mask=None, weight=None, eps: float = 1e-8):
+    log_2pi = math.log(2.0 * math.pi)
+    if target.ndim == 2:
+        target = target.unsqueeze(-1)
+        exposure = exposure.unsqueeze(2)
+        residual_sigma = residual_sigma.unsqueeze(-1)
+        factor_mu = factor_mu.unsqueeze(1)
+        factor_sigma = factor_sigma.unsqueeze(1)
+        mix_logits = mix_logits.unsqueeze(1)
+    mean = torch.einsum("bntp,btkp->bntk", exposure, factor_mu)
+    var = torch.einsum("bntp,btkp->bntk", exposure.pow(2), factor_sigma.pow(2)) + residual_sigma.unsqueeze(-1).pow(2)
+    var = var.clamp_min(eps)
+    log_prob = -0.5 * (log_2pi + torch.log(var) + (target.unsqueeze(-1) - mean).pow(2) / var)
+    log_mix = torch.log_softmax(mix_logits, dim=-1).unsqueeze(1) + log_prob
+    nll = -torch.logsumexp(log_mix, dim=-1)
+    w = torch.ones_like(nll)
+    if mask is not None:
+        w = w * mask.float()
+    if weight is not None:
+        w = w * weight.float()
+    denom = w.sum().clamp_min(eps)
+    return (nll * w).sum() / denom, nll
+
+
+def exposure_orthogonality_loss(exposure, mask=None, eps: float = 1e-8):
+    if exposure.ndim == 3:
+        exposure = exposure.unsqueeze(2)
+        if mask is not None and mask.ndim == 2:
+            mask = mask.unsqueeze(-1)
+    b, n, t, p = exposure.shape
+    x = exposure.permute(0, 2, 1, 3)
+    if mask is None:
+        n_eff = torch.full((b, t, 1, 1), float(n), device=x.device, dtype=x.dtype)
+        gram = torch.einsum("btnp,btnq->btpq", x, x) / n_eff.clamp_min(1.0)
+        valid_bt = torch.ones((b, t), dtype=torch.bool, device=x.device)
+    else:
+        m = mask.float().permute(0, 2, 1).unsqueeze(-1)
+        x = x * m
+        n_eff = m.sum(dim=2, keepdim=True).unsqueeze(-1)
+        gram = torch.einsum("btnp,btnq->btpq", x, x) / n_eff.clamp_min(1.0)
+        valid_bt = n_eff.squeeze(-1).squeeze(-1) >= 2.0
+    eye = torch.eye(p, device=exposure.device, dtype=exposure.dtype).view(1, 1, p, p)
+    per = (gram - eye).pow(2).mean(dim=(-1, -2))
+    if not valid_bt.any():
+        return torch.zeros((), device=exposure.device, dtype=exposure.dtype)
+    return per[valid_bt].mean()
+
+
+def mixture_entropy_loss(mix_logits):
+    lp = torch.log_softmax(mix_logits, dim=-1)
+    p = lp.exp()
+    ent = -(p * lp).sum(dim=-1)
+    return -ent.mean(), ent.mean()
+
+
+class FactorMoGWithAuxObjective(CosineSimilarityObjective):
+    def __init__(self, *args, lambda_cos: float = 1.0, lambda_mse: float = 0.1, lambda_mog_nll: float = 0.0,
+                 lambda_exposure_orth: float = 0.0, lambda_mix_entropy: float = 0.0, lambda_aux_multi_horizon: float = 0.0, **kwargs):
+        super().__init__(*args, lam_cos=lambda_cos, lam_mse=lambda_mse, **kwargs)
+        self.lambda_mog_nll = float(lambda_mog_nll)
+        self.lambda_exposure_orth = float(lambda_exposure_orth)
+        self.lambda_mix_entropy = float(lambda_mix_entropy)
+        self.lambda_aux_multi_horizon = float(lambda_aux_multi_horizon)
+
+    def forward(self, outputs: dict, batch: dict) -> ObjectiveOutput:
+        base = super().forward(outputs, batch)
+        y_true = self.get_target_tensor(batch).float()
+        if y_true.ndim > 2 and y_true.shape[-1] == 1:
+            y_true = y_true[..., 0]
+        mask = self.get_mask_tensor(batch).bool()
+        w = mask.float()
+        main_loss = base.loss
+        metrics = dict(base.metrics)
+        fm = outputs.get("factor_mog")
+        if self.lambda_mog_nll > 0 or self.lambda_exposure_orth > 0 or self.lambda_mix_entropy > 0:
+            if not isinstance(fm, Mapping):
+                raise KeyError("factor_mog outputs are required when factor MoG losses are enabled")
+        if self.lambda_mog_nll > 0:
+            need=["exposure","factor_mu","factor_sigma","residual_sigma","mix_logits"]
+            miss=[k for k in need if k not in fm]
+            if miss: raise KeyError(f"Missing factor_mog fields for NLL: {miss}")
+            mog_nll,_ = marginal_factor_mog_nll(y_true, fm['exposure'], fm['factor_mu'], fm['factor_sigma'], fm['residual_sigma'], fm['mix_logits'], mask=mask, weight=w)
+            main_loss = main_loss + self.lambda_mog_nll * mog_nll
+            metrics['mog_nll']=float(mog_nll.detach().item())
+        if self.lambda_exposure_orth > 0:
+            orth = exposure_orthogonality_loss(fm['exposure'], mask=mask)
+            main_loss = main_loss + self.lambda_exposure_orth * orth
+            metrics['exposure_orth_loss']=float(orth.detach().item())
+        mix_ent = None
+        if fm is not None and 'mix_logits' in fm:
+            mel, me = mixture_entropy_loss(fm['mix_logits'])
+            mix_ent = me
+            if self.lambda_mix_entropy > 0:
+                main_loss = main_loss + self.lambda_mix_entropy * mel
+                metrics['mix_entropy_loss']=float(mel.detach().item())
+        if mix_ent is not None:
+            metrics['mix_entropy']=float(mix_ent.detach().item())
+
+        aux_loss = torch.zeros_like(main_loss)
+        if self.lambda_aux_multi_horizon > 0:
+            aux = outputs.get('aux', {}).get('multi_horizon') if isinstance(outputs.get('aux'), Mapping) else None
+            if not isinstance(aux, Mapping) or 'pred_by_horizon' not in aux:
+                raise KeyError("outputs['aux']['multi_horizon']['pred_by_horizon'] required when lambda_aux_multi_horizon>0")
+            aux_out = self._forward_multi_horizon({'pred_by_horizon': aux['pred_by_horizon']}, batch)
+            aux_loss = aux_out.loss
+            metrics['aux_multi_horizon_loss']=float(aux_loss.detach().item())
+            metrics.update({f"aux_{k}": v for k,v in aux_out.metrics.items()})
+        total = main_loss + self.lambda_aux_multi_horizon * aux_loss
+        metrics['main_loss']=float(main_loss.detach().item())
+        metrics['total_loss']=float(total.detach().item())
+        metrics['loss']=float(total.detach().item())
+        return ObjectiveOutput(loss=total, metrics=metrics)
