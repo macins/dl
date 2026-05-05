@@ -835,10 +835,16 @@ def _build_objective(
     }:
         objective = MoGRegressionObjective(**common_kwargs)
 
+    elif objective_name in {
+        "factor_mog_with_aux",
+        "factor_mog_prediction",
+    }:
+        objective = FactorMoGWithAuxObjective(**common_kwargs)
+
     else:
         raise ValueError(
             f"Unknown objective name={objective_name!r}. "
-            "Expected one of: cosine_similarity, mog_regression."
+            "Expected one of: cosine_similarity, mog_regression, factor_mog_with_aux."
         )
 
     return objective
