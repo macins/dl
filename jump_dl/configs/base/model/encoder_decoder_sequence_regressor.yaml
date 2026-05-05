@@ -1,0 +1,39 @@
+model:
+  name: encoder_decoder_sequence_regressor
+  target_key: ret_30min
+  input_dim: 32
+  d_model: 256
+  d_ff: 512
+  n_heads: 8
+  dropout: 0.1
+
+  adapter_type: linear
+  adapter_norm: true
+
+  n_local_layers: 2
+
+  use_product_memory: true
+  n_product_layers: 1
+
+  use_market_memory: true
+  n_market_layers: 1
+
+  use_factor_memory: true
+  num_factor_tokens: 16
+  n_factor_temporal_layers: 1
+  factor_cross_n_heads: 4
+
+  n_decoder_layers: 2
+  decoder_memory_order: [local, product, market, factor]
+
+  num_horizons: 1
+  use_symbol_embedding: false
+  num_symbols: null
+  use_time_embedding: false
+  max_time_steps: null
+  use_horizon_embedding: true
+  use_product_embedding: false
+
+  head_type: mlp
+  head_hidden_dim: 256
+  output_mode: single_horizon

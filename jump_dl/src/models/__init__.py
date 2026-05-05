@@ -1,4 +1,4 @@
-from .architecture import GRUSequenceRegressor, ModularSequenceRegressor, TransformerSequenceRegressor
+from .architecture import GRUSequenceRegressor, ModularSequenceRegressor, TransformerSequenceRegressor, EncoderDecoderSequenceRegressor
 from .backbone import (
     GRUSequenceBackbone,
     TransformerSequenceBackbone,
@@ -16,6 +16,7 @@ __all__ = [
     "GRUSequenceRegressor",
     "ModularSequenceRegressor",
     "TransformerSequenceRegressor",
+    "EncoderDecoderSequenceRegressor",
     "TabularSequenceEncoder",
     "GRUSequenceBackbone",
     "TransformerSequenceBackbone",
