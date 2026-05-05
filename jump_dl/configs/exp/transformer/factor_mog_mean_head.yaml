@@ -1,5 +1,5 @@
 inherits:
-  - train_transformer_alibi.yaml
+  - ./train_transformer_alibi_moe_nexus.yaml
 
 output_dir: workdirs/jump_dl/factor_mog_mean_head
 
