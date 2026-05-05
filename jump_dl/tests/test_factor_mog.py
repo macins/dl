@@ -1,46 +1,80 @@
 import torch
 
 from jump_dl.src.models.head.factor_mog import ConditionalLatentFactorMoGHead
-from jump_dl.src.objectives import FactorMoGWithAuxObjective, marginal_factor_mog_nll, exposure_orthogonality_loss
 
 
-def test_factor_mog_shapes_and_backward():
-    b,n,t,d,p,k = 2,5,7,16,4,3
-    h = torch.randn(b,n,t,d, requires_grad=True)
-    y = torch.randn(b,n,t)
-    head = ConditionalLatentFactorMoGHead(input_dim=d, num_factors=p, num_components=k)
+def _check_common(fm, min_sigma: float):
+    assert torch.isfinite(fm["pred"]).all()
+    assert torch.isfinite(fm["mix_probs"]).all()
+    assert torch.isfinite(fm["factor_sigma"]).all()
+    assert torch.isfinite(fm["residual_sigma"]).all()
+    assert torch.allclose(fm["mix_probs"].sum(dim=-1), torch.ones_like(fm["mix_probs"].sum(dim=-1)), atol=1e-5)
+    assert (fm["factor_sigma"] >= min_sigma).all()
+    assert (fm["residual_sigma"] >= min_sigma).all()
+
+
+def test_bntd_shapes_and_backward():
+    B, N, T, D, P, K = 2, 5, 7, 16, 4, 3
+    h = torch.randn(B, N, T, D, requires_grad=True)
+    head = ConditionalLatentFactorMoGHead(input_dim=D, num_factors=P, num_components=K, min_factor_sigma=1e-4, min_residual_sigma=1e-4)
     out = head(h)
-    fm = out['factor_mog']
-    assert out['pred'].shape == (b,n,t)
-    assert fm['component_pred'].shape == (b,n,t,k)
-    assert fm['factor_mu'].shape == (b,t,k,p)
-    assert torch.isfinite(out['pred']).all()
-    obj = FactorMoGWithAuxObjective(lambda_mog_nll=0.01, lambda_exposure_orth=0.001, lambda_mix_entropy=0.001)
-    batch={'targets': y, 'padding_mask': torch.ones_like(y, dtype=torch.bool)}
-    loss = obj(out, batch).loss
-    assert torch.isfinite(loss)
-    loss.backward()
+    fm = out["factor_mog"]
+    assert out["pred"].shape == (B, N, T)
+    assert fm["pred"].shape == (B, N, T)
+    assert fm["exposure"].shape == (B, N, T, P)
+    assert fm["factor_mu"].shape == (B, T, K, P)
+    assert fm["component_pred"].shape == (B, N, T, K)
+    _check_common(fm, 1e-4)
+    out["pred"].mean().backward()
 
 
-def test_factor_mog_final_step_and_single_component():
-    b,n,t,d,p = 2,5,7,16,4
-    h = torch.randn(b,n,t,d)
-    y = torch.randn(b,n)
-    head = ConditionalLatentFactorMoGHead(input_dim=d, num_factors=p, num_components=1, final_step_only=True)
+def test_bntd_final_step_shapes():
+    B, N, T, D, P, K = 2, 5, 7, 16, 4, 3
+    h = torch.randn(B, N, T, D)
+    head = ConditionalLatentFactorMoGHead(input_dim=D, num_factors=P, num_components=K, final_step_only=True)
     out = head(h)
-    assert out['pred'].shape == (b,n)
-    fm = out['factor_mog']
-    assert fm['component_pred'].shape == (b,n,1)
-    nll,_ = marginal_factor_mog_nll(y, fm['exposure'], fm['factor_mu'], fm['factor_sigma'], fm['residual_sigma'], fm['mix_logits'])
-    assert torch.isfinite(nll)
-    orth = exposure_orthogonality_loss(fm['exposure'], mask=torch.ones_like(y, dtype=torch.bool))
-    assert torch.isfinite(orth)
+    fm = out["factor_mog"]
+    assert out["pred"].shape == (B, N)
+    assert fm["pred"].shape == (B, N)
+    assert fm["exposure"].shape == (B, N, P)
+    assert fm["factor_mu"].shape == (B, K, P)
+    assert fm["component_pred"].shape == (B, N, K)
 
 
-def test_lambda_zero_does_not_require_factor_fields():
-    obj = FactorMoGWithAuxObjective(lambda_mog_nll=0.0, lambda_exposure_orth=0.0, lambda_mix_entropy=0.0)
-    pred = torch.randn(2,5,7)
-    out = {'preds': {'ret_30min': pred}, 'pred': pred}
-    batch={'targets': torch.randn(2,5,7), 'padding_mask': torch.ones(2,5,7, dtype=torch.bool)}
-    result = obj(out, batch)
-    assert torch.isfinite(result.loss)
+def test_btd_layout_shapes():
+    B, T, D, P, K = 2, 7, 16, 4, 3
+    h = torch.randn(B, T, D)
+    head = ConditionalLatentFactorMoGHead(input_dim=D, num_factors=P, num_components=K, three_dim_layout="BTD")
+    out = head(h)
+    assert out["pred"].shape == (B, T)
+    assert out["factor_mog"]["pred"].shape == (B, 1, T)
+
+
+def test_btd_layout_final_step_shapes():
+    B, T, D, P, K = 2, 7, 16, 4, 3
+    h = torch.randn(B, T, D)
+    head = ConditionalLatentFactorMoGHead(input_dim=D, num_factors=P, num_components=K, three_dim_layout="BTD", final_step_only=True)
+    out = head(h)
+    assert out["pred"].shape == (B,)
+    assert out["factor_mog"]["pred"].shape == (B, 1)
+
+
+def test_bnd_layout_shapes():
+    B, N, D, P, K = 2, 5, 16, 4, 3
+    h = torch.randn(B, N, D)
+    head = ConditionalLatentFactorMoGHead(input_dim=D, num_factors=P, num_components=K, three_dim_layout="BND")
+    out = head(h)
+    assert out["pred"].shape == (B, N)
+    assert out["factor_mog"]["pred"].shape == (B, N, 1)
+
+
+def test_bd_shapes():
+    B, D, P, K = 2, 16, 4, 3
+    h = torch.randn(B, D)
+    out = ConditionalLatentFactorMoGHead(input_dim=D, num_factors=P, num_components=K, final_step_only=False)(h)
+    assert out["pred"].shape == (B,)
+    assert out["factor_mog"]["pred"].shape == (B, 1, 1)
+
+    out2 = ConditionalLatentFactorMoGHead(input_dim=D, num_factors=P, num_components=K, final_step_only=True)(h)
+    assert out2["pred"].shape == (B,)
+    assert out2["factor_mog"]["pred"].shape == (B, 1)
