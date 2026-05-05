@@ -15,7 +15,7 @@ data:
 model:
   __replace__: true
   name: encoder_decoder_sequence_regressor
-  input_dim: 256
+  input_dim: 65
   target_key: ret_30min
   backbone: null
 

@@ -15,7 +15,7 @@ model:
 objective:
   name: factor_mog_with_aux
   lambda_cos: 1.0
-  lambda_mse: 0.1
+  lambda_mse: 0.0
   lambda_mog_nll: 0.0
   lambda_exposure_orth: 0.0
   lambda_mix_entropy: 0.0
