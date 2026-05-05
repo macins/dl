@@ -1279,9 +1279,19 @@ def mixture_entropy_loss(mix_logits):
 
 
 class FactorMoGWithAuxObjective(CosineSimilarityObjective):
-    def __init__(self, *args, lambda_cos: float = 1.0, lambda_mse: float = 0.1, lambda_mog_nll: float = 0.0,
+    def __init__(self, *args, lambda_cos: float | None = None, lambda_mse: float | None = None, lambda_mog_nll: float = 0.0,
                  lambda_exposure_orth: float = 0.0, lambda_mix_entropy: float = 0.0, lambda_aux_multi_horizon: float = 0.0, **kwargs):
-        super().__init__(*args, lam_cos=lambda_cos, lam_mse=lambda_mse, **kwargs)
+        lam_cos = kwargs.pop("lam_cos", None)
+        lam_mse = kwargs.pop("lam_mse", None)
+        if lambda_cos is not None:
+            lam_cos = float(lambda_cos)
+        if lambda_mse is not None:
+            lam_mse = float(lambda_mse)
+        if lam_cos is None:
+            lam_cos = 1.0
+        if lam_mse is None:
+            lam_mse = 0.1
+        super().__init__(*args, lam_cos=lam_cos, lam_mse=lam_mse, **kwargs)
         self.lambda_mog_nll = float(lambda_mog_nll)
         self.lambda_exposure_orth = float(lambda_exposure_orth)
         self.lambda_mix_entropy = float(lambda_mix_entropy)
