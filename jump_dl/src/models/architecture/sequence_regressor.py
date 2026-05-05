@@ -205,11 +205,12 @@ class _BaseSequenceRegressor(BaseModel):
                 mh_aux = {}
             if self.multi_horizon_main not in pred_by_hz:
                 raise ValueError(f"main_horizon={self.multi_horizon_main} not in horizons={self.multi_horizon_horizons}")
-            out["preds"][self.head.target_key] = pred_by_hz[self.multi_horizon_main]
             out["pred_by_horizon"] = pred_by_hz
             out.setdefault("aux_metrics", {}).update({"multi_horizon_enabled": 1.0})
+            aux_ns = out.setdefault("aux", {})
+            aux_ns["multi_horizon"] = {"pred_by_horizon": pred_by_hz}
             if mh_aux:
-                out.setdefault("aux", {}).update(mh_aux)
+                aux_ns["multi_horizon"].update(mh_aux)
 
         aux_losses = getattr(self.backbone, "last_aux_losses", {})
         aux_metrics = dict(getattr(self.backbone, "last_aux_metrics", {}))
