@@ -22,8 +22,10 @@ class ConditionalLatentFactorMoGHead(BaseHead):
                  hidden_dim: int | None = None, dropout: float = 0.0, final_step_only: bool = False,
                  exposure_normalize: bool = True, use_layernorm: bool = True, min_factor_sigma: float = 1e-4,
                  min_residual_sigma: float = 1e-4, max_sigma: float | None = None, market_pooling: str = "mean",
-                 detach_market_pool: bool = False, init_factor_sigma: float = 1.0, init_residual_sigma: float = 1.0) -> None:
+                 detach_market_pool: bool = False, init_factor_sigma: float = 1.0, init_residual_sigma: float = 1.0, **kwargs) -> None:
         super().__init__()
+        # tolerate inherited head kwargs (e.g., num_horizons) used by other head types
+        _ = kwargs
         self.input_dim = int(input_dim)
         self.target_key = str(target_key)
         self.output_dim = int(output_dim)
