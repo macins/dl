@@ -103,3 +103,17 @@ model:
       log_gate: true
       log_alpha: true
       log_attention_entropy: false
+
+
+  innovation:
+    enabled: false
+    latent_dim: null
+    prior_type: gru
+    fusion_type: mlp
+    use_standardized_innovation: true
+    aux_loss_weight: 0.01
+    min_log_s: -6.0
+    max_log_s: 4.0
+    detach_aux_target: true
+    use_market_product_decomposition: false
+    eps: 1.0e-6
