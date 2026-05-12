@@ -8,7 +8,14 @@ from ..backbone import build_backbone
 from ..encoder import build_encoder
 from ..head import build_head
 from ..registry import register_model
-from ..layers import SymbolQueryDecoder, LongTermMemoryRead, PersistentMemoryBank, PrecomputedMemoryEncoder
+from ..layers import (
+    SymbolQueryDecoder,
+    LongTermMemoryRead,
+    PersistentMemoryBank,
+    PrecomputedMemoryEncoder,
+    InnovationConfig,
+    InnovationTokenAdapter,
+)
 from ..head.multi_horizon import MultiHorizonHeads, HorizonQueryDecoder
 
 
@@ -62,6 +69,7 @@ class _BaseSequenceRegressor(BaseModel):
         symbol_query_decoder: Mapping[str, object] | None = None,
         multi_horizon: Mapping[str, object] | None = None,
         long_term_memory: Mapping[str, object] | None = None,
+        innovation: Mapping[str, object] | None = None,
     ) -> None:
         super().__init__()
 
@@ -154,6 +162,25 @@ class _BaseSequenceRegressor(BaseModel):
                 precomputed_encoder=precomputed_encoder,
             )
 
+
+        innovation_cfg_raw = dict(innovation or {})
+        self.innovation_cfg = InnovationConfig(
+            enabled=bool(innovation_cfg_raw.get("enabled", False)),
+            latent_dim=innovation_cfg_raw.get("latent_dim"),
+            prior_type=str(innovation_cfg_raw.get("prior_type", "gru")),
+            fusion_type=str(innovation_cfg_raw.get("fusion_type", "mlp")),
+            use_standardized_innovation=bool(innovation_cfg_raw.get("use_standardized_innovation", True)),
+            aux_loss_weight=float(innovation_cfg_raw.get("aux_loss_weight", 0.01)),
+            min_log_s=float(innovation_cfg_raw.get("min_log_s", -6.0)),
+            max_log_s=float(innovation_cfg_raw.get("max_log_s", 4.0)),
+            detach_aux_target=bool(innovation_cfg_raw.get("detach_aux_target", True)),
+            use_market_product_decomposition=bool(innovation_cfg_raw.get("use_market_product_decomposition", False)),
+            eps=float(innovation_cfg_raw.get("eps", 1e-6)),
+        )
+        self.innovation_adapter = None
+        if self.innovation_cfg.enabled:
+            self.innovation_adapter = InnovationTokenAdapter(self.encoder.output_dim, self.innovation_cfg)
+
         mh_cfg = dict(multi_horizon or {})
         self.multi_horizon_enabled = bool(mh_cfg.get("enabled", False))
         self.multi_horizon_horizons = [int(h) for h in mh_cfg.get("horizons", [30])]
@@ -185,6 +212,19 @@ class _BaseSequenceRegressor(BaseModel):
         padding_mask = batch.get("padding_mask")
 
         x = self.encoder(batch)
+        if self.innovation_adapter is not None:
+            # Filtering interpretation: prior predicts predictable/drift component from past,
+            # innovation captures realized surprise, log_s captures conditional uncertainty.
+            # Fused token combines raw state + expected state + surprise + uncertainty.
+            inn = self.innovation_adapter(
+                x,
+                product_ids=batch.get("product_ids"),
+                mask=padding_mask,
+            )
+            x = inn["token"]
+        else:
+            inn = None
+
         x = self.backbone(x, padding_mask=padding_mask)
         if self.symbol_query_decoder is not None:
             x = self.symbol_query_decoder(x, symbol_ids=batch.get("symbol_ids"))
@@ -218,6 +258,17 @@ class _BaseSequenceRegressor(BaseModel):
             aux_metrics.update(self.symbol_query_decoder.get_aux_stats())
         if self.long_term_memory_enabled and self.long_term_memory_read is not None:
             aux_metrics.update(self.long_term_memory_read.get_aux_stats())
+
+        if inn is not None:
+            aux_losses["innovation_aux_nll"] = self.innovation_cfg.aux_loss_weight * inn["aux_loss"]
+            aux_ns = out.setdefault("aux", {})
+            aux_ns["innovation"] = {
+                "z_pred": inn["z_pred"],
+                "log_s": inn["log_s"],
+                "innovation": inn["innovation"],
+                "innovation_std": inn["innovation_std"],
+            }
+            aux_metrics.update(inn["diagnostics"])
 
         if aux_losses:
             out["aux_losses"] = aux_losses
